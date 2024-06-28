@@ -1,7 +1,7 @@
 import pygsheets
 
-gc = pygsheets.authorize(service_file='linebot-project-426706-2e61ac0e2adb.json')
-sht = gc.open_by_url('https://docs.google.com/spreadsheets/d/1qsFXPl5owas_-yaBo5SVpRqixclmXY6Fnp-LR5hI2M0/edit?usp=sharing')
+gc = pygsheets.authorize(service_file='your service account information file.json')
+sht = gc.open_by_url('your public google excel sheet')
 currentSheet = sht.worksheet('title','2024-6-22')
 uidSheet = sht.worksheet('title','user_uid')
 currentSheet.hidden = False

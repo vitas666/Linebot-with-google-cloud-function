@@ -1,45 +1,58 @@
 import pygsheets
 
-gc = pygsheets.authorize(service_file='your service account information file.json')
-sht = gc.open_by_url('your public google excel sheet')
-currentSheet = sht.worksheet('title','2024-6-22')
-uidSheet = sht.worksheet('title','user_uid')
-currentSheet.hidden = False
+gc = pygsheets.authorize(service_file='linebot-project-426706-2e61ac0e2adb.json')
+sht = gc.open_by_url('https://docs.google.com/spreadsheets/d/1qsFXPl5owas_-yaBo5SVpRqixclmXY6Fnp-LR5hI2M0/edit?usp=sharing')
+currentSheet = sht.worksheet('title','2024-6-22').get_all_records()
+uidSheet = sht.worksheet('title','user_uid').get_all_records()
 
 def getUserDonateData(userId):
-    findLabel = uidSheet.find(userId)[0].label
-    personalDonateInformation = currentSheet.get_row(int(findLabel.replace('B', '')), include_tailing_empty=False)
-    return {
-        'DonateInformation': personalDonateInformation,
-        'Label': findLabel
-    }
+    nameDict = {item['名字']: item for item in currentSheet}
+    uidDict = next((item for item in uidSheet if item['uid'] == userId), None)
+    if not uidDict:
+        return None
+    currDict = nameDict.get(uidDict['名字'], {})
+    # Combine two dictionaries
+    fullData = {**uidDict, **currDict}
+    return fullData
 
 def userRegister(userId, realName):
     # this function is used for checking the user display name change or not, if no change do nothing
-    nameList = uidSheet.get_col(1, include_tailing_empty=False)
-    try:
-        if uidSheet.find(userId)[0].value == userId:
-            return 'alreadyRegistered'
-    except:
+    uidList = [uid['uid'] for uid in uidSheet if uid['uid'] != '']
+    if userId in uidList:
+        return 'alreadyRegistered'
+
+    else:
+        nameList = [name['名字'] for name in uidSheet]
         if realName in nameList:
-            userLabel = uidSheet.find(realName)[0].label
-            uidSheet.update_value('B'+userLabel.replace('A', ''), userId)
+            uidDict = [item for item in uidSheet]
+            userLabel = next((index for (index, d) in enumerate(uidDict) if d['名字'] == realName), None) + 2
+            sht.worksheet('title','user_uid').update_value('B'+str(userLabel), userId)
             return 'successful'
         else:
             return 'failed'
     
 def isSentMessage(userId):
-    if getUserDonateData(userId)['DonateInformation'][-1] == 'Y':
+    if getUserDonateData(userId)['已傳送訊息'] == 'Y':
         return True
     else:
         return False
 
 async def updateSendMsgFlag(userId):
-    userLabel = getUserDonateData(userId)['Label']
-    currentSheet.update_value('F'+userLabel.replace('B', ''), 'Y')
+    nameDict = [item for item in currentSheet]
+    name = getUserDonateData(userId)['名字']
+    userLabel = next((index for (index, d) in enumerate(nameDict) if d['名字'] == name), None) + 2
+    sht.worksheet('title','2024-6-22').update_value('F'+str(userLabel), 'Y')
 
 def getAllUsersUid():
-    nameList = currentSheet.get_col(1, include_tailing_empty=False)
-    labelArray = [uidSheet.find(name)[0].label for name in nameList if name != '名字']
-    return [uidSheet.get_row(int(label.replace('A', '')), include_tailing_empty=False)[1] for label in labelArray]
+    # function to return all uid in currentSheet
+    nameDict = {item['名字']: item for item in currentSheet}
+    uidDict = {item['名字']: item for item in uidSheet}
+    combined_data = []
+    for name, currDict in nameDict.items():
+        uidEntry = uidDict.get(name, {})
+        # Combine two dictionaries
+        fullData = {**uidEntry, **currDict}
+        combined_data.append(fullData)
+    uidList = [item['uid'] for item in combined_data]
+    return uidList
 

@@ -7,11 +7,10 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, StickerSendMessage
 from datetime import datetime, timedelta
 import time
-from googleDrive import getUserDonateData, userRegister, isSentMessage, getAllUsersUid, updateSendMsgFlag
-from dateHelper import allSaturdays, allSundays, allThursday
+from googleDrive import getUserDonateData, userRegister, isSentMessage, getAllUsersUid, updateSendMsgFlag, getSheetTitle
+from dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
 
-current_time = datetime.now()
 
 def linebot(request):
     try:
@@ -54,6 +53,8 @@ def linebot(request):
             
     except:
         try:
+            if getSheetTitle() != lastSaturday(datetime.now()) and getSheetTitle() != lastSunday(datetime.now()):
+                return 'OK'
             asyncio.run(sendMsgByRequest())
         except Exception as error:
             print('error occurs on publishing events: ', error)
@@ -67,32 +68,25 @@ def messageToSend(userId):
     # only send the message to the person who really donate to the church
     if userDonateInformation['總奉獻'] != '0':
         content = f'''Hello {userDonateInformation['名字']}, 收到你的奉獻如下: 
-一般奉獻: {userDonateInformation['一般奉獻']}元, 
-十一奉獻: {userDonateInformation['十一奉獻']}元, 
-ARK奉獻: {userDonateInformation['ARK奉獻']}元, 
+日期: {getSheetTitle()}
+一般奉獻: {userDonateInformation['一般奉獻']}元
+十一奉獻: {userDonateInformation['十一奉獻']}元
+ARK奉獻: {userDonateInformation['ARK奉獻']}元
 總奉獻: {userDonateInformation['總奉獻']}元
 謝謝你慷慨的給予！'''
         return content
     return ''
 
 
-def isOnSchedule():
-    sendMessageschedule = [datetime.combine(day, datetime.min.time()).replace(hour=12, minute=00) for day in allThursday(current_time.year)]
-    if any(current_time >= scheduled_time and current_time < scheduled_time + timedelta(minutes=30) for scheduled_time in sendMessageschedule):
-        return True
-    else:
-        return False
-
-
 def publishMsgBySchedule(userId):
-    # if the schedule is reached, publish the message to all user in friend list
     # check if we sent the message or not
     if isSentMessage(userId):
         return 'OK'
     return messageToSend(userId)
 
+
 async def sendMsgByRequest():
-    headers = {'Authorization': 'Bearer your own access token', 'Content-Type': 'application/json'}
+    headers = {'Authorization': 'Bearer jkE5qxpWwrfFgkvgEVitn00Da/RAGN2rNIR0FAZwMrnJacYy5PVZOMveCI9t4ZdRRIEzhPOgTQXWA1PKH/NzPq1F3eL9Oa+i6E26TF5AUrjBL0PK9iT+UBulR4yqH+cZAUUL9r3f+mEdtzCY6a2GGQdB04t89/1O/w1cDnyilFU=', 'Content-Type': 'application/json'}
     nameList = getAllUsersUid()
     for uid in nameList:
         msg = publishMsgBySchedule(uid)
@@ -112,7 +106,7 @@ async def sendMsgByRequest():
         gc.collect()
         # after sending the message, we should update the sent msg flag, preventing from sending the same message again.
         await updateSendMsgFlag(uid)
+        time.sleep(5)
         
-
     return 'OK'
 

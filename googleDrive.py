@@ -1,17 +1,13 @@
 import pygsheets
-from dateHelper import lastSaturday, lastSunday
-from datetime import datetime
-
-def findSheet():
-    try:
-        return sht.worksheet('title', lastSaturday(datetime.now()))
-    except:
-        return sht.worksheet('title', lastSunday(datetime.now()))
 
 gc = pygsheets.authorize(service_file='linebot-project-426706-2e61ac0e2adb.json')
 sht = gc.open_by_url('https://docs.google.com/spreadsheets/d/1qsFXPl5owas_-yaBo5SVpRqixclmXY6Fnp-LR5hI2M0/edit?usp=sharing')
-currentSheet = findSheet().get_all_records()
+currentSheet = sht[0].get_all_records()
+sheetTitle = sht[0].title
 uidSheet = sht.worksheet('title','user_uid').get_all_records()
+
+def getSheetTitle():
+    return sheetTitle
 
 def getUserDonateData(userId):
     nameDict = {item['名字']: item for item in currentSheet}
@@ -49,7 +45,7 @@ async def updateSendMsgFlag(userId):
     nameDict = [item for item in currentSheet]
     name = getUserDonateData(userId)['名字']
     userLabel = next((index for (index, d) in enumerate(nameDict) if d['名字'] == name), None) + 2
-    findSheet().update_value('F'+str(userLabel), 'Y')
+    sht[0].update_value('F'+str(userLabel), 'Y')
 
 def getAllUsersUid():
     # function to return all uid in currentSheet
@@ -63,4 +59,3 @@ def getAllUsersUid():
         combined_data.append(fullData)
     uidList = [item['uid'] for item in combined_data]
     return uidList
-

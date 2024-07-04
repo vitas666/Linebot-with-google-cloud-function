@@ -1,7 +1,7 @@
 import pygsheets
 
-gc = pygsheets.authorize(service_file='linebot-project-426706-2e61ac0e2adb.json')
-sht = gc.open_by_url('https://docs.google.com/spreadsheets/d/1qsFXPl5owas_-yaBo5SVpRqixclmXY6Fnp-LR5hI2M0/edit?usp=sharing')
+gc = pygsheets.authorize(service_file='your_service_account_setting.json')
+sht = gc.open_by_url('your google excel share link')
 currentSheet = sht[0].get_all_records()
 sheetTitle = sht[0].title
 uidSheet = sht.worksheet('title','user_uid').get_all_records()

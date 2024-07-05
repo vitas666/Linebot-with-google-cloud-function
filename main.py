@@ -10,7 +10,7 @@ import time
 from googleDrive import getUserDonateData, userRegister, isSentMessage, getAllUsersUid, updateSendMsgFlag, getSheetTitle
 from dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
-
+from GenerativeAI import responseByAI
 
 def linebot(request):
     try:

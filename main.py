@@ -47,6 +47,9 @@ def linebot(request):
                         tk, TextSendMessage(text='註冊失敗, 請聯絡財務團隊或It團隊'))
                 elif registerStatus == 'successful':
                     line_bot_api.reply_message(tk, TextSendMessage(text='註冊成功'))
+                msg = responseByAI(json_data['events'][0]['message']['text'])
+                line_bot_api.reply_message(tk, TextSendMessage(text=msg))
+                return 'OK'
             
         except Exception as error:
             print('error occurs on reply events: ', error)

@@ -89,7 +89,7 @@ def publishMsgBySchedule(userId):
 
 
 async def sendMsgByRequest():
-    headers = {'Authorization': 'Bearer jkE5qxpWwrfFgkvgEVitn00Da/RAGN2rNIR0FAZwMrnJacYy5PVZOMveCI9t4ZdRRIEzhPOgTQXWA1PKH/NzPq1F3eL9Oa+i6E26TF5AUrjBL0PK9iT+UBulR4yqH+cZAUUL9r3f+mEdtzCY6a2GGQdB04t89/1O/w1cDnyilFU=', 'Content-Type': 'application/json'}
+    headers = {'Authorization': 'Bearer Your Access token', 'Content-Type': 'application/json'}
     nameList = getAllUsersUid()
     for uid in nameList:
         msg = publishMsgBySchedule(uid)

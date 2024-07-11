@@ -43,10 +43,11 @@ def linebot(request):
                 registerStatus = userRegister(
                     userId, json_data['events'][0]['message']['text'])
                 if registerStatus == 'failed':
-                    line_bot_api.reply_message(
-                        tk, TextSendMessage(text='註冊失敗, 請聯絡財務團隊或It團隊'))
+                    line_bot_api.reply_message(tk, TextSendMessage(text='註冊失敗, 請聯絡財務團隊或It團隊'))
+                    return 'OK'
                 elif registerStatus == 'successful':
                     line_bot_api.reply_message(tk, TextSendMessage(text='註冊成功'))
+                    return 'OK'
                 msg = responseByAI(json_data['events'][0]['message']['text'])
                 line_bot_api.reply_message(tk, TextSendMessage(text=msg))
                 return 'OK'

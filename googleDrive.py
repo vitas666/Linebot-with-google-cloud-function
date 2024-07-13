@@ -28,6 +28,8 @@ def userRegister(userId, realName):
     else:
         nameList = [name['名字'] for name in uidSheet]
         if realName in nameList:
+            if next((item['uid'] for item in uidSheet if item['名字'] == realName), None) != '':
+                return 'failed'
             uidDict = [item for item in uidSheet]
             userLabel = next((index for (index, d) in enumerate(uidDict) if d['名字'] == realName), None) + 2
             sht.worksheet('title','user_uid').update_value('B'+str(userLabel), userId)

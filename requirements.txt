@@ -1,0 +1,5 @@
+functions-framework==3.*
+line-bot-sdk
+pygsheets
+google.generativeai
+mysql-connector-python

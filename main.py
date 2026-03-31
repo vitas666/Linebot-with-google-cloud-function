@@ -2,7 +2,7 @@ import json
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, StickerSendMessage
-from DB.DBConnection import save_chat_message, save_form_response, init_database
+from DB.DBConnection import get_recent_chat_history, save_chat_message, save_form_response, init_database
 from googleDrive import userRegister
 from Utils.dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
@@ -67,6 +67,14 @@ def linebot(request):
                     line_bot_api.push_message(userId, TextSendMessage(text=text))
                     print('this is form response: ', formResponse)
                     return 'OK'
+                if json_data['events'][0]['message']['text'] == 'RAG測試':
+                    init_database()
+                    chat_context = get_recent_chat_history(userId, response_id)
+                    text = "這是一段測試對話紀錄的訊息。"
+                    save_chat_message(
+                        user_id=userId, 
+                        session_id=''
+                    )
                 # msg = responseByAI(json_data['events'][0]['message']['text'])
                 # line_bot_api.reply_message(tk, TextSendMessage(text=msg))
                 return 'OK'
@@ -89,12 +97,11 @@ def linebot(request):
 # 功能一：
 # 設計完表單以後，讓API可以讀取表單內容，並存放表單內容到mysql中
 # 將剛才抓的表單內容直接傳給AI閱讀, 做出第一次分析，並將第一次分析的對話紀錄同表單內容存到mysql中
-# 讓AI在回覆對話之前先根據對話紀錄以及使用者適用的投資計劃進行RAG訓練
-# 將進行完訓練的RAG模型用在對話生成上
 # 將對話內容回傳給使用者，並且更新對話紀錄db table
 
 # 功能二：識別使用者投資計劃：
-# 鼓勵，教使用者回傳自己的投資組合，並接受該標地的新聞通知，以及盤後，技術線，主力買賣情形
+# 閱讀聊天歷史紀錄，導入RAG，鼓勵，教使用者回傳自己的投資組合，並接受該標地的新聞通知，以及盤後，技術線，主力買賣情形
+# 可產出excel分析報告提供使用者是否要下載的選項
 # 使用者可隨時選擇是否要開啟此功能
 
 # 功能三：讓使用者可以隨時調整投資計劃

@@ -8,6 +8,7 @@ from GenerativeAI import responseByAI
 import config
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
+from Dictionary.InvestmentPlan import investment_plans
 
 # Google Forms API 需要的 scope
 SCOPES = ['https://www.googleapis.com/auth/forms.responses.readonly']
@@ -78,28 +79,63 @@ def AIResponseToForm(form_responses: dict) -> dict:
     """
     struct_answer = form_responses.get("structured_answers", [])
     answers_text = json.dumps(struct_answer, indent=2, ensure_ascii=False)
+    plans_text = json.dumps(investment_plans, ensure_ascii=False)
 
     prompt = f"""
-    你是一位專業且具備同理心的理財顧問，請根據以下使用者填寫的財務狀況與投資問卷，進行初步的分析。
+    你是一位專業且具備同理心的理財顧問，同時也是系統的路由核心。
+    請根據【使用者問卷回答】，進行財務分析，並從【可用投資策略】中挑選最適合他的一個。
     
     【使用者問卷回答】
     {answers_text}
+
+    【可用投資策略】
+    {plans_text}
     
     【你的任務】
-    1. 總結這位使用者的財務現況與風險承受度。
-    2. 給予 2 到 3 個初步的理財觀念或建議。
+    1. 總結這位使用者的財務現況與風險承受度，結合可用投資策略內容，於plan_id: 1到4中，幫使用者找出最適合的投資策略。
+    2. 給予幾個初步的理財觀念或建議, 並放到analysis_message之中
     3. 語氣要專業但親切，像是對朋友說話一樣。
+
+    【輸出格式要求】
+    請務必只回傳一個乾淨的 JSON 物件，格式如下：
+    {{
+        "assigned_plan_id": 1,  # 請填入最適合該使用者的 plan_id (數字)
+        "analysis_message": # 請填入你對使用者的分析與建議 (文字)
+    }}
     """
     
     # 這裡假設有一個函式 responseByAI 可以將資料傳給AI並得到分析結果
-    analysis_result = responseByAI(prompt)['text_content']
-    token_usage = {
-        "prompt_tokens": responseByAI(prompt)['prompt_tokens'],
-        "completion_tokens": responseByAI(prompt)['completion_tokens'],
-        "total_tokens": responseByAI(prompt)['total_tokens']
-    }
+    ai_result = responseByAI(prompt)
+    # analysis_result = ai_result['text_content']
+    try:
+        # 將 AI 回傳的 JSON 字串解析回 Python 字典
+        ai_content_dict = json.loads(ai_result['text_content']) 
+        
+        analysis_message = ai_content_dict.get("analysis_message", "分析完成，請參考後續建議。")
+        assigned_plan_id = ai_content_dict.get("assigned_plan_id", 1) # 預設給保守型
+        
+    except json.JSONDecodeError:
+        print("AI 未回傳正確的 JSON 格式")
+        analysis_message = "抱歉，系統分析時遇到一點小問題，但我已經收到您的表單了！"
+        assigned_plan_id = 1
+
+    # token_usage = {
+    #     "prompt_tokens": ai_result['prompt_tokens'],
+    #     "completion_tokens": ai_result['completion_tokens'],
+    #     "total_tokens": ai_result['total_tokens']
+    # }
     
+    # return {
+    #     "analysis_result": analysis_result, "token_usage": token_usage
+    # }
+
     return {
-        "analysis_result": analysis_result, "token_usage": token_usage
+        "analysis_result": analysis_message,
+        "assigned_plan_id": assigned_plan_id,
+        "token_usage": {
+            "prompt_tokens": ai_result.get('prompt_tokens', 0),
+            "completion_tokens": ai_result.get('completion_tokens', 0),
+            "total_tokens": ai_result.get('total_tokens', 0)
+        }
     }
 

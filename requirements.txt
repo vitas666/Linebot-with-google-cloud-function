@@ -3,3 +3,5 @@ line-bot-sdk
 pygsheets
 google.generativeai
 mysql-connector-python
+yfinance
+openpyxl

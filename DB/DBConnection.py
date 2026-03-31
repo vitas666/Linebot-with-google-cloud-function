@@ -93,9 +93,19 @@ def init_database():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """
+        
+        table_porfolio = """
+        CREATE TABLE IF NOT EXISTS user_portfolios (
+            user_id VARCHAR(255) PRIMARY KEY,          -- 綁定 Line User ID
+            tracked_symbols JSON,                      -- 存放使用者持有的標的代碼 (如：["2330", "0050"])
+            is_subscribed BOOLEAN DEFAULT FALSE,       -- 開關推播功能的 Flag
+            last_notified_at DATETIME,                 -- 紀錄上次推播時間，避免重複洗頻
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        );
+        """
 
         # 依序執行所有建立資料表的 SQL
-        for sql in [table_form, table_investment, table_chat]:
+        for sql in [table_form, table_investment, table_chat, table_porfolio]:
             cursor.execute(sql)
             
         conn.commit()
@@ -237,3 +247,34 @@ def get_recent_chat_history(user_id: str, session_id: str, max_messages=10, max_
             cursor.close()
         if conn and conn.is_connected():
             conn.close()
+
+
+def get_user_specific_strategy(user_id: str):
+    """
+    [每次使用者傳訊息時執行]
+    只從 MySQL 撈出該使用者專屬的那一條策略。
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # 透過 JOIN 語法，用 user_id 找出他的 plan_id，再拉出核心策略
+        sql = """
+        SELECT p.plan_name, p.core_strategy, p.recommended_assets
+        FROM user_portfolios u
+        JOIN investment_plans p ON u.plan_id = p.plan_id
+        WHERE u.user_id = %s
+        """
+        cursor.execute(sql, (user_id,))
+        strategy = cursor.fetchone()
+        
+        return strategy
+    except Exception as e:
+        print(f"撈取策略失敗: {e}")
+        return None
+    finally:
+        if conn and conn.is_connected():
+            cursor.close()
+            conn.close()
+

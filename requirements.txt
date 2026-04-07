@@ -5,3 +5,5 @@ google.generativeai
 mysql-connector-python
 yfinance
 openpyxl
+ddgs
+beautifulsoup4

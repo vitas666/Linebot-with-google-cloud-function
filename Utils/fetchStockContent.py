@@ -20,7 +20,7 @@ def fetchStockPrice(symbol: str) -> float:
 
 def fetchStockFundamentals(symbol: str) -> dict:
     """
-    抓取指定股票的客觀基本面數據 (包含法說會關注的毛利率、營收成長、EPS等)。    
+    抓取指定股票的客觀基本面數據 (包含法說會關注的毛利率、營收成長、EPS等)。
     範例代碼：台股台積電 '2330.TW' 或 美股 ADR 'TSM'
     """
     print(f"正在檢索 {symbol} 的客觀財務與營運數據...")
@@ -209,6 +209,75 @@ def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
         return {"error": f"抓取大戶持股時發生錯誤: {e}"}
 
 
+def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
+    """
+    獲取個股歷史本益比，並計算出「歷史最高、最低、平均與目前位階」。
+    將龐大的時間序列資料壓縮為 AI 容易理解的統計特徵。
+    """
+    print(f"正在計算 {stock_id} 過去 {years} 年的估值位階...")
+    
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(days=years * 365)
+    
+    url = "https://api.finmindtrade.com/api/v4/data"
+    params = {
+        "dataset": "TaiwanStockPER",
+        "data_id": stock_id,
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d")
+    }
+    
+    try:
+        res = requests.get(url, params=params, timeout=10)
+        data = res.json()
+        
+        if data.get("msg") != "success" or not data.get("data"):
+            return {"status": "error", "message": "查無本益比資料"}
+            
+        records = data["data"]
+        
+        # 提取本益比資料，過濾掉為 0 或負數(通常代表公司該季虧損)的無效數值
+        pe_list = [r["PER"] for r in records if r.get("PER", 0) > 0]
+        
+        if not pe_list:
+            return {"status": "error", "message": "無有效本益比數據 (可能近期皆為虧損)"}
+            
+        latest_pe = pe_list[-1]
+        max_pe = max(pe_list)
+        min_pe = min(pe_list)
+        avg_pe = sum(pe_list) / len(pe_list)
+        
+        # 找出中位數，避免極端值的干擾
+        sorted_pe = sorted(pe_list)
+        median_pe = sorted_pe[len(sorted_pe)//2]
+        
+        # 🌟 核心指標：計算目前位階百分比 (0% 代表跌到歷史最低，100% 代表創歷史新高)
+        if max_pe == min_pe:
+            position_percent = 50.0
+        else:
+            position_percent = ((latest_pe - min_pe) / (max_pe - min_pe)) * 100
+            
+        summary = {
+            "資料區間": f"過去 {years} 年",
+            "目前本益比": round(latest_pe, 2),
+            "歷史最高本益比": round(max_pe, 2),
+            "歷史最低本益比": round(min_pe, 2),
+            "歷史平均本益比": round(avg_pe, 2),
+            "歷史中位數本益比": round(median_pe, 2),
+            # 給 AI 看的超直覺指標
+            "目前歷史位階": f"{round(position_percent, 2)}% (100%代表最貴，0%代表最便宜)"
+        }
+        
+        return {
+            "status": "success",
+            "symbol": stock_id,
+            "pe_evaluation": summary
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": f"計算估值位階時發生錯誤: {e}"}
+
+
 def getStockExcel(symbol: str):
     ticker = yf.Ticker(symbol)
     balance_sheet = ticker.balance_sheet
@@ -242,3 +311,7 @@ if __name__ == "__main__":
     for key, value in tsmc_large_shareholders["large_shareholders"].items():
         print(f"{key}: {value}")
 
+    tsmc_pe_bands = fetch_historical_pe_bands("2330", 3)
+    print(f"\n--- {tsmc_pe_bands['symbol']} 歷史本益比評估 ---")
+    for key, value in tsmc_pe_bands["pe_evaluation"].items():
+        print(f"{key}: {value}")

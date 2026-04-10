@@ -196,7 +196,7 @@ def fetch_tw_index_technical_indicators(ticker_symbol: str = "^TWII") -> dict:
 
 def fetch_tx_foreign_open_interest() -> dict:
     """
-    獲取台灣期貨市場最重要的籌碼指標：「外資台指期未平倉淨口數」。
+    獲取台灣期貨市場最重要的籌碼指標：「外資台指期未平倉淨口數」
     """
     print("正在調閱外資台指期未平倉籌碼...")
     

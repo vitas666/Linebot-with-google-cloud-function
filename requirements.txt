@@ -7,3 +7,4 @@ yfinance
 openpyxl
 ddgs
 beautifulsoup4
+playwright

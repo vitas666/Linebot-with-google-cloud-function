@@ -1,8 +1,13 @@
+import json
+import os
+import sys
 import yfinance as yf
 import requests
 import datetime
 import xml.etree.ElementTree as ET
 import pandas as pd
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Dictionary.updateStockName import get_stock_info
 
 
 def fetchStockPrice(symbol: str) -> float:
@@ -24,7 +29,9 @@ def fetchStockFundamentals(symbol: str) -> dict:
     範例代碼：台股台積電 '2330.TW' 或 美股 ADR 'TSM'
     """
     print(f"正在檢索 {symbol} 的客觀財務與營運數據...")
-    
+    if get_stock_info(symbol):
+        symbol += '.TW'
+
     try:
         ticker = yf.Ticker(symbol)
         # 取得公司基本面與財務指標字典
@@ -161,6 +168,75 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
         "margin_data": margin_summary
     }
 
+
+def fetch_us_stock_chips(symbol: str) -> dict:
+    """
+    抓取美股特有的籌碼面數據 (季度機構持股、半月做空數據)。
+    """
+    print(f"正在獲取 {symbol} 的美股籌碼面數據...")
+    
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        print(json.dumps(info, indent=4, ensure_ascii=False))
+        # 如果找不到資料，代表代號錯誤或 API 阻擋
+        if 'shortName' not in info:
+            return {"status": "error", "message": f"查無 {symbol} 的籌碼資料"}
+
+        # ==========================================
+        # 🏢 1. 機構持股數據 (Institutional Ownership)
+        # ==========================================
+        # 取得機構持股比例 (轉換為百分比)
+        inst_pct = info.get('heldPercentInstitutions')
+        inst_pct_str = f"{inst_pct * 100:.2f}%" if inst_pct else "無資料"
+        
+        # 內部人持股比例 (CEO, 董事等)
+        insider_pct = info.get('heldPercentInsiders')
+        insider_pct_str = f"{insider_pct * 100:.2f}%" if insider_pct else "無資料"
+
+        # ==========================================
+        # 📉 2. 做空數據 (Short Interest) - 約每半個月更新
+        # ==========================================
+        # 做空股數佔在外流通股數的比例
+        short_pct = info.get('shortPercentOfFloat')
+        short_pct_str = f"{short_pct * 100:.2f}%" if short_pct else "無資料"
+        
+        # 空單回補天數 (Short Ratio / Days to Cover)
+        short_ratio = info.get('shortRatio')
+        short_ratio_str = f"{short_ratio:.2f} 天" if short_ratio else "無資料"
+        
+        # 總做空股數
+        shares_short = info.get('sharesShort')
+        shares_short_str = f"{shares_short:,} 股" if shares_short else "無資料"
+
+        # ==========================================
+        # 🎁 3. 組合回傳結果 (整理成給 LLM 或 Line Bot 閱讀的格式)
+        # ==========================================
+        chip_summary = {
+            "機構持股比例": inst_pct_str,
+            "內部人持股比例": insider_pct_str,
+            "做空比例 (Short % of Float)": short_pct_str,
+            "空單回補天數 (Days to Cover)": short_ratio_str,
+            "目前總做空股數": shares_short_str
+        }
+        
+        reply_msg = f"🏦 【{symbol} 美股籌碼面分佈】\n"
+        reply_msg += "=" * 20 + "\n"
+        reply_msg += f"• 🏢 機構持股比例: {inst_pct_str} (華爾街大戶佔比)\n"
+        reply_msg += f"• 👔 內部人持股: {insider_pct_str} (高管/董事佔比)\n"
+        reply_msg += "-" * 20 + "\n"
+        reply_msg += f"• 📉 做空比例: {short_pct_str} (越高代表市場越看空)\n"
+        reply_msg += f"• 🏃 空單回補天數: {short_ratio_str} (軋空潛在風險)\n"
+        reply_msg += f"• 📊 總做空股數: {shares_short_str}\n"
+        reply_msg += "=" * 20 + "\n"
+        reply_msg += "💡 備註：美股機構持股為季度更新，做空數據為半月更新。"
+        
+        return reply_msg
+
+    except Exception as e:
+        return f"抓取美股籌碼數據時發生錯誤: {e}"
+    
+
 def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
     """
     抓取台股「外資持股比例」的週變化，天數預設為五天
@@ -291,27 +367,27 @@ def to_pct(val) -> str:
 
 
 if __name__ == "__main__":
-    # 測試抓取台積電 (TSMC)
-    tsmc_data = fetchStockFundamentals("2330.TW")
-    for key, value in tsmc_data.items():
-        print(f"指標 | {key}: {value}")
+    # stock_data = fetchStockFundamentals("2317")
+    # for key, value in stock_data.items():
+    #     print(f"指標 | {key}: {value}")
 
-    tsmc_chip = fetchMarketLeverage("2330")
-    print(f"\n--- {tsmc_chip['symbol']} 籌碼面數據 ({tsmc_chip['period']}) ---")
-    for key, value in tsmc_chip["chip_data"].items():
-        # 加上明顯的買賣指標，幫助 LLM 理解情緒
-        action = "買超" if value > 0 else "賣超"
-        print(f"{key}: {value:,.0f} 張 ({action})")
-    for key, value in tsmc_chip["margin_data"].items():
-        print(f"{key}: {value}")
+    # tsmc_chip = fetchMarketLeverage("2330")
+    # print(f"\n--- {tsmc_chip['symbol']} 籌碼面數據 ({tsmc_chip['period']}) ---")
+    # for key, value in tsmc_chip["chip_data"].items():
+    #     # 加上明顯的買賣指標，幫助 LLM 理解情緒
+    #     action = "買超" if value > 0 else "賣超"
+    #     print(f"{key}: {value:,.0f} 張 ({action})")
+    # for key, value in tsmc_chip["margin_data"].items():
+    #     print(f"{key}: {value}")
+    us_stock = fetch_us_stock_chips("SNDK")
+    print(us_stock)
+    # tsmc_large_shareholders = fetchLargeShareholdersData("2330", 4)
+    # print(tsmc_large_shareholders)
+    # print(f"\n--- {tsmc_large_shareholders['symbol']} 外資持股比例 ---")
+    # for key, value in tsmc_large_shareholders["large_shareholders"].items():
+    #     print(f"{key}: {value}")
 
-    tsmc_large_shareholders = fetchLargeShareholdersData("2330", 4)
-    print(tsmc_large_shareholders)
-    print(f"\n--- {tsmc_large_shareholders['symbol']} 外資持股比例 ---")
-    for key, value in tsmc_large_shareholders["large_shareholders"].items():
-        print(f"{key}: {value}")
-
-    tsmc_pe_bands = fetch_historical_pe_bands("2330", 3)
-    print(f"\n--- {tsmc_pe_bands['symbol']} 歷史本益比評估 ---")
-    for key, value in tsmc_pe_bands["pe_evaluation"].items():
-        print(f"{key}: {value}")
+    # tsmc_pe_bands = fetch_historical_pe_bands("2330", 3)
+    # print(f"\n--- {tsmc_pe_bands['symbol']} 歷史本益比評估 ---")
+    # for key, value in tsmc_pe_bands["pe_evaluation"].items():
+    #     print(f"{key}: {value}")

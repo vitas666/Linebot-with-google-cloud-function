@@ -3,7 +3,7 @@ import datetime
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def findStockNews(stock_id: str, company_name: str, maxResults: int = 5) -> dict:
+def findStockNews(company_name: str, maxResults: int = 5) -> dict:
     """
     利用爬蟲套件，搜尋指定公司相關的新聞
     """
@@ -18,7 +18,7 @@ def findStockNews(stock_id: str, company_name: str, maxResults: int = 5) -> dict
             news.append({
                 "title": result.get("title", ""),
                 "content": result.get("body", ""),
-                "url": result.get("url", ""),
+                "url": result.get("href", ""),
             })
 
         if not news:
@@ -34,7 +34,8 @@ def findStockNews(stock_id: str, company_name: str, maxResults: int = 5) -> dict
 
 
 if __name__ == "__main__":
-    news_data = findStockNews('2330', '台積電')
+    news_data = findStockNews('台積電')
     for idx, n in enumerate(news_data["news"]):
-            print(f"\n[{idx+1}] {n['title']}")
-            print(f"摘要: {n['content']}")
+        print(f"\n[{idx+1}] {n['title']}")
+        print(f"摘要: {n['content']}")
+        print(f"連結: {n['url']}")

@@ -10,7 +10,7 @@ def fetchMOPSData(stock_id: str, language: str) -> dict:
     從 MOPS 獲取財報資料，並解析成結構化格式。
     """
     with sync_playwright() as p:
-        # headless=True 代表在背景默默跑，你可以先改成 False 看它跑一次，確認沒問題再改回 True
+        # 可下此命令模擬網站實際程式碼： playwright codegen https://mopsov.twse.com.tw/mops/web/t100sb07_1
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

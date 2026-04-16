@@ -1,14 +1,20 @@
+import datetime
 import json
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, StickerSendMessage
 from DB.DBConnection import get_recent_chat_history, save_chat_message, save_form_response, init_database
+from Utils.fetchStockDaily import fetch_tw_index_technical_indicators, fetch_tx_foreign_open_interest, fetchLimitUpDownStocks
+from Utils.googleSearch import findStockNews
 from googleDrive import userRegister
 from Utils.dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
 import google.generativeai as genai
+from Dictionary.updateStockName import get_stock_info
 from googleForm import get_google_form_responses, AIResponseToForm, get_struct_answers
 from Utils.utils import sendMsgByRequest, messageToSend
+from Utils.fetchEarningContent import fetchMonthlyRevenue, fetchMaterialInformation
+from Utils.fetchStockContent import fetch_historical_pe_bands, fetchLargeShareholdersData, fetchMarketLeverage, fetchStockFundamentals
 
 def linebot(request):
     try:
@@ -30,7 +36,8 @@ def linebot(request):
                 return 'OK'
             # only accept the message events
             if json_data['events'][0]['type'] == 'message':
-                registerStatus = userRegister(userId, json_data['events'][0]['message']['text'])
+                inputText = json_data['events'][0]['message']['text']
+                registerStatus = userRegister(userId, inputText)
                 print('this is register status: ', registerStatus)
                 if registerStatus == 'update uid successful':
                     line_bot_api.push_message(userId, TextSendMessage(text='註冊成功'))
@@ -39,14 +46,14 @@ def linebot(request):
                 #     line_bot_api.push_message(userId, TextSendMessage(text='您的名字不在註冊清單上, 請聯絡財務團隊或It團隊'))
                 #     return 'OK'
                 # send the donate information manually
-                if json_data['events'][0]['message']['text'] == '奉獻資訊':
+                if inputText == '奉獻資訊':
                     msg = messageToSend(userId)
                     line_bot_api.push_message(userId, TextSendMessage(text=msg))
                     return 'OK'
-                if json_data['events'][0]['message']['text'] == '測試':
+                if inputText == '測試':
                     line_bot_api.push_message(userId, TextSendMessage(text='這是測試'))
                     return 'OK'
-                if json_data['events'][0]['message']['text'] == '表單測試':
+                if inputText == '表單測試':
                     init_database()
                     formResponse = get_google_form_responses()
                     structAnswers = get_struct_answers(formResponse)
@@ -67,14 +74,65 @@ def linebot(request):
                     line_bot_api.push_message(userId, TextSendMessage(text=text))
                     print('this is form response: ', formResponse)
                     return 'OK'
-                if json_data['events'][0]['message']['text'] == 'RAG測試':
+                if inputText == 'RAG測試':
                     init_database()
                     chat_context = get_recent_chat_history(userId, response_id)
-                    text = "這是一段測試對話紀錄的訊息。"
+                    text = f"這是我們上一次的對話內容：\n\n{chat_context}\n\n請根據這些資訊，提供我一些投資建議。"
                     save_chat_message(
                         user_id=userId, 
                         session_id=''
                     )
+                if '股票基本資訊' in inputText:
+                    targetStock = inputText.replace('股票基本資訊', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    stock_info = fetchStockFundamentals(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=stock_info))
+                if '營收與重大資訊' in inputText:
+                    targetStock = inputText.replace('營收與重大資訊', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    revenue_info = fetchMonthlyRevenue(stock_id)
+                    material_info = fetchMaterialInformation(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=revenue_info))
+                    line_bot_api.push_message(userId, TextSendMessage(text=material_info))
+                if '新聞' in inputText:
+                    targetStock = inputText.replace('新聞', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    if stock_id:
+                        news_info = findStockNews(stock_name)
+                        line_bot_api.push_message(userId, TextSendMessage(text=news_info))
+                    else:
+                        line_bot_api.push_message(userId, TextSendMessage(text=f"無法找到 {targetStock} 的股票資訊，請確認輸入的公司名稱是否正確。"))
+                if '最新漲跌停資訊' in inputText:
+                    today = datetime.datetime.now().strftime("%Y%m%d") # YYYYMMDD
+                    upDownLimitReport = fetchLimitUpDownStocks(today)
+                    line_bot_api.push_message(userId, TextSendMessage(text=upDownLimitReport))
+                if '技術指標' in inputText:
+                    targetStock = inputText.replace('技術指標', '').strip()
+                    if targetStock == '大盤' or targetStock == '台股':
+                        stock_id = 'TAIEX'
+                    else:
+                        stock_id, stock_name = get_stock_info(targetStock)
+                    stockReport = fetch_tw_index_technical_indicators(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=stockReport))
+                if '最新台指期三大法人未平倉資訊' in inputText:
+                    foreignFuturesOIReport = fetch_tx_foreign_open_interest(1)
+                    line_bot_api.push_message(userId, TextSendMessage(text=foreignFuturesOIReport))
+                if '市場槓桿資訊' in inputText:
+                    targetStock = inputText.replace('市場槓桿資訊', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    fetchMarketLeverageReport = fetchMarketLeverage(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=fetchMarketLeverageReport))
+                if '外資持股變化' in inputText:
+                    targetStock = inputText.replace('外資持股變化', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    largeShareholdersData = fetchLargeShareholdersData(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=largeShareholdersData))
+                if '歷史本益比' in inputText:
+                    targetStock = inputText.replace('歷史本益比', '').strip()
+                    stock_id, stock_name = get_stock_info(targetStock)
+                    historicalPE = fetch_historical_pe_bands(stock_id)
+                    line_bot_api.push_message(userId, TextSendMessage(text=historicalPE))
+
                 # msg = responseByAI(json_data['events'][0]['message']['text'])
                 # line_bot_api.reply_message(tk, TextSendMessage(text=msg))
                 return 'OK'

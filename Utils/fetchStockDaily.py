@@ -116,92 +116,149 @@ def fetchLimitUpDownStocks(date_str: str) -> dict:
         return {"status": "error", "message": f"抓取漲跌停資料時發生錯誤: {e}"}
 
 
-def fetch_tw_index_technical_indicators(ticker_symbol: str = "^TWII") -> dict:
+def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
     """
-    獲取台股大盤的經典技術指標 (MA, RSI, MACD)。
-    純 Pandas 實作，無須依賴 pandas_ta 或 TA-Lib，完美支援最新版 Python。
+    獲取個股的經典技術指標 (MA, VOL, RSI, MACD, KD)，預設為台股大盤指數 (TAIEX)
     """
-    print("正在使用Pandas計算台指大盤的最新技術指標...")
+    print("正在透過 FinMind 獲取大盤現貨報價並計算技術指標...")
+    
+    # 抓取過去 1 年的資料，確保 MACD 和 KD 擁有完美的歷史收斂度
+    end_date = datetime.datetime.now()
+    start_date = end_date - datetime.timedelta(days=365)
+    
+    url = "https://api.finmindtrade.com/api/v4/data"
+    params = {
+        "dataset": "TaiwanStockPrice",
+        "data_id": stock_symbol,
+        "start_date": start_date.strftime("%Y-%m-%d"),
+        "end_date": end_date.strftime("%Y-%m-%d")
+    }
     
     try:
-        # 抓取最近 3 個月的資料
-        df = yf.download(ticker_symbol, period="3mo", progress=False)
+        # 1. 向 API 請求資料
+        res = requests.get(url, params=params, timeout=10)
+        data = res.json()
+        if data.get("msg") != "success" or not data.get("data"):
+            return "查無大盤報價資料或 API 連線異常。"
+            
+        # 2. 直接將 JSON 轉換為 Pandas DataFrame
+        df = pd.DataFrame(data["data"])
         
-        if df.empty:
-            return {"status": "error", "message": "無法取得大盤報價資料"}
-            
-        # 處理 yfinance 回傳的 MultiIndex 欄位問題
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
+        # 3. 欄位對齊：將 FinMind 欄位對應到我們習慣的欄位
+        df.rename(columns={
+            'max': 'High',
+            'min': 'Low',
+            'close': 'Close',
+        }, inplace=True)
+        
+        # 確保日期格式正確，並照時間排序
+        df['date'] = pd.to_datetime(df['date'])
+        df.sort_values('date', inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        
+        # 提取運算欄位
         close_px = df['Close']
+        high_px = df['High']
+        low_px = df['Low']
         
         # ==========================================
-        # 📊 1. 手刻移動平均線 (SMA)
+        # 📊 手刻移動平均線 (SMA)
         # ==========================================
         df['SMA_5'] = close_px.rolling(window=5).mean()
         df['SMA_20'] = close_px.rolling(window=20).mean()
         
         # ==========================================
-        # 📈 2. 手刻相對強弱指標 (RSI - 14日)
+        # 📈 手刻相對強弱指標 (RSI - 14日)
         # ==========================================
-        # 計算每日漲跌幅
         delta = close_px.diff()
-        # 分離上漲與下跌
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
         
-        # 使用 Wilder's 經典平滑法 (對應 alpha=1/14 的指數移動平均)
         avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
         avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
         
-        # 計算相對強度 (RS) 與 RSI
         rs = avg_gain / avg_loss
         df['RSI_14'] = 100 - (100 / (1 + rs))
         
         # ==========================================
-        # 📉 3. 手刻 MACD (12, 26, 9)
+        # 📉 手刻 MACD (12, 26, 9)
         # ==========================================
-        # 計算 12日與 26日 EMA (指數移動平均)
         ema_12 = close_px.ewm(span=12, adjust=False).mean()
         ema_26 = close_px.ewm(span=26, adjust=False).mean()
-        
-        # 計算 MACD 差離值 (DIF)
         df['MACD_line'] = ema_12 - ema_26
-        # 計算訊號線 (DEM)
         df['Signal_line'] = df['MACD_line'].ewm(span=9, adjust=False).mean()
-        # 計算柱狀圖 (OSC)
         df['MACD_histogram'] = df['MACD_line'] - df['Signal_line']
         
-        # 取得最新一天的所有數據
+        # ==========================================
+        # ⚡ 手刻「券商標準版」 KD 指標 (9, 3, 3)
+        # ==========================================
+        df['9D_High'] = high_px.rolling(window=9).max()
+        df['9D_Low'] = low_px.rolling(window=9).min()
+        
+        denominator = df['9D_High'] - df['9D_Low']
+        df['RSV'] = 100 * (close_px - df['9D_Low']) / denominator.replace(0, 1)
+        
+        # 強制初始值為 50 並手動迴圈收斂
+        rsv_list = df['RSV'].fillna(50).tolist()
+        k_list = [50.0]
+        d_list = [50.0]
+        
+        for i in range(1, len(rsv_list)):
+            today_k = (2/3) * k_list[-1] + (1/3) * rsv_list[i]
+            today_d = (2/3) * d_list[-1] + (1/3) * today_k
+            k_list.append(today_k)
+            d_list.append(today_d)
+            
+        df['K'] = k_list
+        df['D'] = d_list
+
+        # ==========================================
+        # 🎁 取出最新一筆資料並整理輸出
+        # ==========================================
         latest = df.iloc[-1]
+        prev = df.iloc[-2]
         
-        summary = {
-            "最新收盤價": f"{latest['Close']:.2f}",
-            "5日均線(周線)": f"{latest['SMA_5']:.2f}",
-            "20日均線(月線)": f"{latest['SMA_20']:.2f}",
-            "RSI (14日)": f"{latest['RSI_14']:.2f}",
-            "MACD 柱狀圖": f"{latest['MACD_histogram']:.2f}"
-        }
+        # KD 多空判斷
+        curr_k, curr_d = latest['K'], latest['D']
+        prev_k, prev_d = prev['K'], prev['D']
         
-        return {
-            "status": "success",
-            "symbol": "台股加權指數",
-            "indicators": summary
-        }
+        kd_signal = "盤整"
+        if prev_k < prev_d and curr_k > curr_d:
+            kd_signal = "黃金交叉 (轉強)"
+        elif prev_k > prev_d and curr_k < curr_d:
+            kd_signal = "死亡交叉 (轉弱)"
+        elif curr_k > curr_d:
+            kd_signal = "偏多"
+        elif curr_k < curr_d:
+            kd_signal = "偏空"
+
+        # 排版給 Line Bot
+        reply_text = f"【台股大盤技術面指標】\n"
+        reply_text += "=" * 20 + "\n"
+        reply_text += f"日期: {latest['date'].strftime('%Y-%m-%d')}\n"
+        reply_text += f"• 收盤指數: {latest['Close']:.2f}\n"
+        reply_text += f"• 成交總金額: {(latest['Trading_money']/100000000):.2f} 億元(含ETF與權證)\n"
+        reply_text += f"• 5日均線: {latest['SMA_5']:.2f}\n"
+        reply_text += f"• 20日均線: {latest['SMA_20']:.2f}\n"
+        reply_text += f"• RSI (14日): {latest['RSI_14']:.2f}\n"
+        reply_text += f"• MACD柱狀圖: {latest['MACD_histogram']:.2f}\n"
+        reply_text += f"• KD 指標: K {curr_k:.2f} / D {curr_d:.2f} ({kd_signal})\n"
+        reply_text += "=" * 20
+        
+        return reply_text
 
     except Exception as e:
-        return {"status": "error", "message": f"計算技術指標時發生錯誤: {e}"}
-    
+        return f"計算技術指標時發生錯誤: {e}"
 
-def fetch_tx_foreign_open_interest() -> dict:
+
+def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
     """
     獲取台灣期貨市場最重要的籌碼指標：「外資台指期未平倉淨口數」
     """
     print("正在調閱外資台指期未平倉籌碼...")
     
     end_date = datetime.datetime.now()
-    start_date = end_date - datetime.timedelta(days=7)
+    start_date = end_date - datetime.timedelta(days)
     
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
@@ -216,31 +273,55 @@ def fetch_tx_foreign_open_interest() -> dict:
         data = res.json()
         if data.get("msg") != "success" or not data.get("data"):
             return {"status": "error", "message": "查無期貨籌碼資料"}
+                    
+        foreign_records = [r for r in data["data"] if r.get("institutional_investors") == "外資"]
+        dealer_records = [r for r in data["data"] if r.get("institutional_investors") == "自營商"]
+        investment_records = [r for r in data["data"] if r.get("institutional_investors") == "投信"]
+        
+        # # 只取使用者要求的近 N 個交易日
+        # recent_records = foreign_records[-days:]
+        
+        # # 開始組裝要回傳給 Line Bot 的訊息
+        # reply_msg = f"【外資台指期未平倉趨勢 - 近 {len(recent_records)} 日】\n"
+        
+        # for record in recent_records:
+        #     long_oi = record.get("long_open_interest_balance_volume", 0)
+        #     short_oi = record.get("short_open_interest_balance_volume", 0)
+        #     net_oi = long_oi - short_oi
             
-        # 過濾出「外資及陸資」的紀錄
-        records = [r for r in data["data"] if r.get("institutional_investors") == "外資"]        
-        if not records:
-             return {"status": "error", "message": "查無外資期貨紀錄"}
-             
+        #     # 判斷多空情緒
+        #     sentiment = "偏多" if net_oi > 0 else "偏空"
+        #     if abs(net_oi) > 20000:
+        #         sentiment = "極度" + sentiment
+                
+        #     reply_msg += f"{record['date']}\n"
+        #     reply_msg += f"淨未平倉: {net_oi:,} 口 ({sentiment})\n\n"
+
         # 取得最新一天的外資期貨部位
-        latest_record = records[-1]
+        latest_foreign_record = foreign_records[-1]
+        latest_dealer_record = dealer_records[-1]
+        latest_investment_record = investment_records[-1]
         
-        # 🌟 核心計算：未平倉淨口數 = 多方未平倉 (buy_oi) - 空方未平倉 (sell_oi)
-        # 很多開源資料庫欄位名稱會有落差，我們加上 dict.get 容錯處理
-        long_oi = latest_record.get("long_open_interest_balance_volume", 0)
-        short_oi = latest_record.get("short_open_interest_balance_volume", 0)
-        net_oi = long_oi - short_oi
-        
-        # 判斷多空情緒
-        sentiment = "偏多" if net_oi > 0 else "偏空"
-        if abs(net_oi) > 20000:
-            sentiment = "極度強烈" + sentiment
+        # 核心計算：未平倉淨口數 = 多方未平倉 (buy_oi) - 空方未平倉 (sell_oi)
+        long_foreign_oi = latest_foreign_record.get("long_open_interest_balance_volume", 0)
+        short_foreign_oi = latest_foreign_record.get("short_open_interest_balance_volume", 0)
+        net_foreign_oi = long_foreign_oi - short_foreign_oi
+
+        long_dealer_oi = latest_dealer_record.get("long_open_interest_balance_volume", 0)
+        short_dealer_oi = latest_dealer_record.get("short_open_interest_balance_volume", 0)
+        net_dealer_oi = long_dealer_oi - short_dealer_oi
+
+        long_investment_oi = latest_investment_record.get("long_open_interest_balance_volume", 0)
+        short_investment_oi = latest_investment_record.get("short_open_interest_balance_volume", 0)
+        net_investment_oi = long_investment_oi - short_investment_oi
             
         summary = {
-            "日期": latest_record["date"],
-            "外資多單留倉": f"{long_oi} 口",
-            "外資空單留倉": f"{short_oi} 口",
-            "外資淨未平倉": f"{net_oi} 口 ({sentiment})"
+            # "未平倉資訊": reply_msg,
+            "訊息": f"以下為{latest_foreign_record['date']} 台指期三大法人多空單未平倉狀況(正為多，負為空)：",
+            "外資淨未平倉": f"{net_foreign_oi} 口",
+            "自營商淨未平倉": f"{net_dealer_oi} 口",
+            "投信淨未平倉": f"{net_investment_oi} 口",
+            "總未平倉": f"{net_foreign_oi + net_dealer_oi + net_investment_oi} 口"
         }
         
         return {
@@ -254,7 +335,7 @@ def fetch_tx_foreign_open_interest() -> dict:
 
 if __name__ == "__main__":
     # 測試一個確定的交易日 (請確保輸入的是台股有開盤的過去日期)
-    # test_date = "20260407" # YYYYMMDD
+    # test_date = datetime.datetime.now().strftime("%Y%m%d") # YYYYMMDD
     
     # result = fetchLimitUpDownStocks(test_date)
     
@@ -271,14 +352,10 @@ if __name__ == "__main__":
 
     # print("\n--- 台指大盤技術指標 ---")
     # tw_index_indicators = fetch_tw_index_technical_indicators()
-    # if tw_index_indicators["status"] == "success":
-    #     for key, value in tw_index_indicators["indicators"].items():
-    #         print(f"{key}: {value}")
-    # else:
-    #     print(tw_index_indicators["message"])
+    # print(tw_index_indicators)
 
     print("\n--- 外資台指期未平倉籌碼 ---")
-    foreign_oi = fetch_tx_foreign_open_interest()
+    foreign_oi = fetch_tx_foreign_open_interest(1)
     if foreign_oi["status"] == "success":
         for key, value in foreign_oi["foreign_futures_oi"].items():
             print(f"{key}: {value}")

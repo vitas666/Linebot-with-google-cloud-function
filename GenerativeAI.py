@@ -1,13 +1,15 @@
-import google.generativeai as genai
-import os
+import google.genai as genai
 import config
 
-genai.configure(api_key=config.GEMINI_API_KEY)
-model = genai.GenerativeModel('models/gemini-2.5-pro')
+client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-def responseByAI(input) -> dict:
-    response = model.generate_content(input)
-    reply_text = response.text
+def responseByAI(input_text: str) -> dict:
+    response = client.models.generate_content(
+        model='gemini-2.5-pro',
+        contents=input_text
+    )
+    
+    reply_text = response.text    
     usage = response.usage_metadata
     prompt_tokens = usage.prompt_token_count
     completion_tokens = usage.candidates_token_count
@@ -19,3 +21,8 @@ def responseByAI(input) -> dict:
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens
     }
+
+if __name__ == "__main__":
+    test_input = "請問台積電的股票基本資訊？"
+    ai_response = responseByAI(test_input)
+    print(ai_response)

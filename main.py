@@ -9,7 +9,6 @@ from Utils.googleSearch import findStockNews
 from googleDrive import userRegister
 from Utils.dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
-import google.generativeai as genai
 from Dictionary.updateStockName import get_stock_info
 from googleForm import get_google_form_responses, AIResponseToForm, get_struct_answers
 from Utils.utils import sendMsgByRequest, messageToSend

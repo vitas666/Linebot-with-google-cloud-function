@@ -5,7 +5,7 @@ import pandas as pd
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def fetchLimitUpDownStocks(date_str: str) -> dict:
+def fetchLimitUpDownStocks(date_str: str) -> str:
     """
     獲取指定日期（格式：YYYYMMDD）的上市漲停與跌停股票清單。
     利用證交所「每日收盤行情」API，一次性過濾全市場數據。
@@ -30,7 +30,7 @@ def fetchLimitUpDownStocks(date_str: str) -> dict:
         print(res_json)
         
         if res_json.get("stat") != "OK":
-            return {"status": "error", "message": f"無法取得 {date_str} 的資料，可能是假日或尚未收盤。"}
+            return f"無法取得 {date_str} 的資料，可能是假日或尚未收盤。"
             
         # 🌟 動態尋找資料表：證交所回傳很多表格，我們找出包含「證券代號」與「收盤價」的那一張
         target_fields = []
@@ -103,15 +103,34 @@ def fetchLimitUpDownStocks(date_str: str) -> dict:
             except ValueError:
                 # 遇到無法轉成數字的奇怪資料就跳過
                 continue
-                
-        return {
-            "status": "success",
-            "date": date_str,
-            "limit_up_count": len(limit_up_list),
-            "limit_down_count": len(limit_down_list),
-            "limit_up_stocks": limit_up_list,
-            "limit_down_stocks": limit_down_list
-        }
+
+        # 整理最終要輸出的字串格式
+        up_count = len(limit_up_list)
+        down_count = len(limit_down_list)
+        
+        # 用「、」把清單串起來，如果沒有半家則顯示「無」
+        up_stocks_str = "、".join(limit_up_list) if up_count > 0 else "無"
+        down_stocks_str = "、".join(limit_down_list) if down_count > 0 else "無"
+        
+        reply_msg = (
+            f"{date_str} 上市漲跌停統計\n"
+            f"-------------------------------\n"
+            f"🔴 漲停家數：{up_count} 家\n"
+            f"{up_stocks_str}\n"
+            f"-------------------------------\n"
+            f"🟢 跌停家數：{down_count} 家\n"
+            f"{down_stocks_str}"
+        )
+        
+        return reply_msg 
+        # return {
+        #     "status": "success",
+        #     "date": date_str,
+        #     "limit_up_count": len(limit_up_list),
+        #     "limit_down_count": len(limit_down_list),
+        #     "limit_up_stocks": limit_up_list,
+        #     "limit_down_stocks": limit_down_list
+        # }
 
     except Exception as e:
         return {"status": "error", "message": f"抓取漲跌停資料時發生錯誤: {e}"}
@@ -251,8 +270,7 @@ def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
     except Exception as e:
         return f"計算技術指標時發生錯誤: {e}"
 
-
-def get_us_market_indices():
+def get_us_market_indices() -> str:
     """
     獲取美股四大指數的最新報價與漲跌幅
     """
@@ -264,37 +282,44 @@ def get_us_market_indices():
         "標普500指數": "^GSPC"
     }
     
-    results = []
+    # 準備用來存放每一行文字的串列
+    reply_lines = [
+        "美股四大指數最新報價",
+        "-------------------------------"
+    ]
+    
     for name, ticker_symbol in indices.items():
-        ticker = yf.Ticker(ticker_symbol)
-        # 獲取最近 5 天的歷史資料 (抓取多天以防遇到週末或國定假日)
-        hist = ticker.history(period="5d")
-        
-        if len(hist) >= 2:
-            # 最新交易日收盤價
-            current_price = hist['Close'].iloc[-1]
-            # 前一交易日收盤價
-            previous_close = hist['Close'].iloc[-2]
-            # 計算漲跌幅 (%)
-            change_percent = ((current_price - previous_close) / previous_close) * 100
-            results.append({
-                "指數名稱": name,
-                "代號": ticker_symbol,
-                "最新報價": round(current_price, 2),
-                "漲跌幅 (%)": round(change_percent, 2)
-            })
-        else:
-            results.append({
-                "指數名稱": name,
-                "代號": ticker_symbol,
-                "最新報價": "獲取失敗",
-                "漲跌幅 (%)": "獲取失敗"
-            })
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            # 獲取最近 5 天的歷史資料 (抓取多天以防遇到週末或國定假日)
+            hist = ticker.history(period="5d")
+            
+            if len(hist) >= 2:
+                # 最新交易日收盤價
+                current_price = hist['Close'].iloc[-1]
+                # 前一交易日收盤價
+                previous_close = hist['Close'].iloc[-2]
+                # 計算漲跌幅 (%)
+                change_percent = ((current_price - previous_close) / previous_close) * 100
+                
+                # 格式化數字：加上千分位與小數點後兩位
+                price_str = f"{current_price:,.2f}"
+                
+                # 處理漲跌幅的正負號顯示
+                sign = "+" if change_percent > 0 else ""
+                pct_str = f"{sign}{change_percent:.2f}%"
+                
+                reply_lines.append(f"{name}：{price_str} ({pct_str})")
+            else:
+                reply_lines.append(f"{name}：獲取失敗 (資料不足)")
+                
+        except Exception as e:
+            reply_lines.append(f"{name}：獲取失敗")
 
-    return results
+    return "\n".join(reply_lines)
 
 
-def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
+def fetch_tx_foreign_open_interest(days: int = 7) -> str:
     """
     獲取台灣期貨市場最重要的籌碼指標：「外資台指期未平倉淨口數」
     """
@@ -315,7 +340,7 @@ def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
         res = requests.get(url, params=params, timeout=10)
         data = res.json()
         if data.get("msg") != "success" or not data.get("data"):
-            return {"status": "error", "message": "查無期貨籌碼資料"}
+            return f"查無期貨籌碼資料"
                     
         foreign_records = [r for r in data["data"] if r.get("institutional_investors") == "外資"]
         dealer_records = [r for r in data["data"] if r.get("institutional_investors") == "自營商"]
@@ -367,45 +392,35 @@ def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
             "總未平倉": f"{net_foreign_oi + net_dealer_oi + net_investment_oi} 口"
         }
         
-        return {
-            "status": "success",
-            "foreign_futures_oi": summary
-        }
+        reply_msg = (
+            f"📅 以下為 {latest_foreign_record['date']} 台指期三大法人多空單未平倉狀況：\n"
+            f"(正為多單，負為空單)\n"
+            f"-------------------------------\n"
+            f"🔹 外資淨未平倉：{net_foreign_oi:,} 口\n"
+            f"🔹 自營商淨未平倉：{net_dealer_oi:,} 口\n"
+            f"🔹 投信淨未平倉：{net_investment_oi:,} 口\n"
+            f"📊 總未平倉：{net_foreign_oi + net_dealer_oi + net_investment_oi:,} 口"
+        )
+        return reply_msg
 
     except Exception as e:
-        return {"status": "error", "message": f"抓取外資期貨籌碼時發生錯誤: {e}"}
-    
+        return f"抓取外資期貨籌碼時發生錯誤: {e}"
+
 
 if __name__ == "__main__":
     # 測試一個確定的交易日 (請確保輸入的是台股有開盤的過去日期)
     # test_date = datetime.now().strftime("%Y%m%d") # YYYYMMDD
     
     # result = fetchLimitUpDownStocks(test_date)
-    
-    # if result["status"] == "success":
-    #     print(f"\n日期: {result['date']}")
-    #     print(f"漲停家數: {result['limit_up_count']}")
-    #     # 為了避免洗版，我們只印出前 10 檔
-    #     for stock in result['limit_up_stocks']:
-    #         print(f"{stock}")
-            
-    #     print(f"\n跌停家數: {result['limit_down_count']}")
-    #     for stock in result['limit_down_stocks']:
-    #         print(f"{stock}")
+    # print(result)
 
     # print("\n--- 台指大盤技術指標 ---")
     # tw_index_indicators = fetch_tw_index_technical_indicators()
     # print(tw_index_indicators)
 
-    # us_market_indices = get_us_market_indices()
-    # print("\n--- 美股四大指數最新報價與漲跌幅 ---")
-    # for idx in us_market_indices:
-    #     print(f"{idx['指數名稱']} ({idx['代號']}): {idx['最新報價']} 點, 漲跌幅: {idx['漲跌幅 (%)']}%")
+    us_market_indices = get_us_market_indices()
+    print(us_market_indices)
 
-    print("\n--- 外資台指期未平倉籌碼 ---")
-    foreign_oi = fetch_tx_foreign_open_interest(1)
-    if foreign_oi["status"] == "success":
-        for key, value in foreign_oi["foreign_futures_oi"].items():
-            print(f"{key}: {value}")
-    else:
-        print(foreign_oi["message"])
+    # print("\n--- 外資台指期未平倉籌碼 ---")
+    # foreign_oi = fetch_tx_foreign_open_interest(1)
+    # print(foreign_oi)

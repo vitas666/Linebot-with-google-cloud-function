@@ -3,14 +3,14 @@ import os
 import sys
 import yfinance as yf
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Dictionary.updateStockName import get_stock_info
 
 
-def fetchStockFundamentals(symbol: str) -> dict:
+def fetchStockFundamentals(symbol: str) -> str:
     """
     抓取指定股票的客觀基本面數據 (包含法說會關注的毛利率、營收成長、EPS等)。
     範例代碼：台股台積電 '2330.TW' 或 美股 ADR 'TSM'
@@ -43,14 +43,33 @@ def fetchStockFundamentals(symbol: str) -> dict:
             "預估未來 EPS (財測)": info.get("forwardEps", "無資料"),
             "目前本益比 (P/E)": round(info.get("trailingPE", 0), 2) if info.get("trailingPE") else "無資料"
         }
+
+        reply_msg = (
+            f"📈 【{symbol} 核心財務數據】\n"
+            f"💰 目前股價：${round(current_price, 2):,}\n"
+            f"-------------------------------\n"
+            f"🚀 [營收與成長性]\n"
+            f"🔹 營收成長率 (YoY)：{fundamentals['營收成長率 (YoY)']}\n"
+            f"🔹 盈餘成長率 (Earnings Growth)：{fundamentals['盈餘成長率 (Earnings Growth)']}\n"
+            f"-------------------------------\n"
+            f"💎 [獲利能力]\n"
+            f"🔹 毛利率：{fundamentals['毛利率 (Gross Margin)']}\n"
+            f"🔹 營業利益率：{fundamentals['營業利益率 (Operating Margin)']}\n"
+            f"🔹 股東權益報酬率 (ROE)：{fundamentals['股東權益報酬率 (ROE)']}\n"
+            f"-------------------------------\n"
+            f"⚖️ [估值與 EPS]\n"
+            f"🔹 過去12個月 EPS：{fundamentals['過去12個月 EPS']}\n"
+            f"🔹 預估未來 EPS：{fundamentals['預估未來 EPS (財測)']}\n"
+            f"🔹 目前本益比 (P/E)：{fundamentals['目前本益比 (P/E)']}"
+        )
         
-        return fundamentals
+        return reply_msg
         
     except Exception as e:
-        return {"error": f"抓取 {symbol} 財務數據時發生錯誤: {e}"}
+        return f"抓取 {symbol} 財務數據時發生錯誤: {e}"
 
 
-def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
+def fetchMarketLeverage(stock_id: str, days: int = 5) -> str:
     """
     抓取台股特有的「籌碼面」數據 (目前實作：三大法人買賣超) 以及融資融券增減情況。
     利用 FinMind 開源 API 取得資料，轉換為 LLM 容易閱讀的文字格式。
@@ -62,7 +81,7 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
     
     # 計算日期範圍
     end_date = datetime.now()
-    start_date = end_date - datetime.timedelta(days=days + 4) # 多抓幾天避開假日
+    start_date = end_date - timedelta(days=days + 4) # 多抓幾天避開假日
     
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
@@ -79,7 +98,7 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
         response = requests.get(url, params=params)
         data = response.json()
         if data["msg"] != "success" or not data["data"]:
-            return {"status": "error", "message": "查無籌碼資料"}
+            return "查無籌碼資料"
             
         # 解析籌碼數據
         records = data["data"]
@@ -109,7 +128,7 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
                     chip_summary["自營商累積買賣超 (張)"] += net_volume
 
     except Exception as e:
-        return {"error": f"抓取籌碼數據時發生錯誤: {e}"}
+        return f"抓取籌碼數據時發生錯誤: {e}"
     
     try:
         params = {
@@ -121,7 +140,7 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
         response = requests.get(url, params=params)
         data = response.json()
         if data.get("msg") != "success" or not data.get("data"):
-            return {"status": "error", "message": "查無融資融券資料"}
+            return "查無融資融券資料"
             
         records = data["data"]
         
@@ -147,19 +166,35 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
             "目前融券餘額 (張)": latest_record['ShortSaleTodayBalance'],
             f"近 {len(dates_found)} 日融券增減 (張)": short_change
         }
-        
+
+        reply_msg = f"📊 【{stock_id} 籌碼面與融資融券趨勢】\n"
+        reply_msg += "=" * 30 + "\n"
+        reply_msg += f"📈 三大法人買賣超 (最近 {len(dates_found)} 個交易日累計):\n"
+        reply_msg += f"• 外資累積買賣超: {chip_summary['外資累積買賣超 (張)']} 張\n"
+        reply_msg += f"• 投信累積買賣超: {chip_summary['投信累積買賣超 (張)']} 張\n"
+        reply_msg += f"• 自營商累積買賣超: {chip_summary['自營商累積買賣超 (張)']} 張\n"
+        reply_msg += "-" * 30 + "\n"
+        reply_msg += f"💹 融資融券趨勢:\n"
+        reply_msg += f"• 目前融資餘額: {margin_summary['目前融資餘額 (張)']} 張\n"
+        reply_msg += f"• 近 {len(dates_found)} 日融資增減: {margin_summary[f'近 {len(dates_found)} 日融資增減 (張)']} 張\n"
+        reply_msg += f"• 目前融券餘額: {margin_summary['目前融券餘額 (張)']} 張\n"
+        reply_msg += f"• 近 {len(dates_found)} 日融券增減: {margin_summary[f'近 {len(dates_found)} 日融券增減 (張)']} 張\n"
+        reply_msg += "=" * 30 + "\n"
+
+        return reply_msg
+
     except Exception as e:
-        return {"error": f"抓取融資融券數據時發生錯誤: {e}"}
+        return f"抓取融資融券數據時發生錯誤: {e}"
 
-    return {
-        "symbol": stock_id,
-        "period": f"最近 {len(dates_found)} 個交易日",
-        "chip_data": chip_summary,
-        "margin_data": margin_summary
-    }
+    # return {
+    #     "symbol": stock_id,
+    #     "period": f"最近 {len(dates_found)} 個交易日",
+    #     "chip_data": chip_summary,
+    #     "margin_data": margin_summary
+    # }
 
 
-def fetch_us_stock_chips(symbol: str) -> dict:
+def fetch_us_stock_chips(symbol: str) -> str:
     """
     抓取美股特有的籌碼面數據 (季度機構持股、半月做空數據)。
     """
@@ -168,10 +203,9 @@ def fetch_us_stock_chips(symbol: str) -> dict:
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
-        print(json.dumps(info, indent=4, ensure_ascii=False))
         # 如果找不到資料，代表代號錯誤或 API 阻擋
         if 'shortName' not in info:
-            return {"status": "error", "message": f"查無 {symbol} 的籌碼資料"}
+            return f"查無 {symbol} 的籌碼資料"
 
         # ==========================================
         # 🏢 1. 機構持股數據 (Institutional Ownership)
@@ -227,7 +261,7 @@ def fetch_us_stock_chips(symbol: str) -> dict:
         return f"抓取美股籌碼數據時發生錯誤: {e}"
     
 
-def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
+def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> str:
     """
     抓取台股「外資持股比例」的週變化，天數預設為五天
     比較不同天數區間，外資大戶的持股增減。
@@ -235,7 +269,7 @@ def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
     print(f"正在檢索 {stock_id} 的外資大戶持股動向...")
     
     end_date = datetime.now()
-    start_date = end_date - datetime.timedelta(days)
+    start_date = end_date - timedelta(days)
     
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
@@ -249,7 +283,7 @@ def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
         response = requests.get(url, params=params)
         data = response.json()
         if data.get("msg") != "success" or not data.get("data"):
-            return {"status": "error", "message": "查無大戶持股資料"}
+            return "查無大戶持股資料"
             
         records = data["data"]
         # 取得最新與前一次的資料 (資料已經照日期排好)
@@ -266,16 +300,19 @@ def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
             "外資持股週變化": f"{round(latest_ratio - prev_ratio, 2)}%"
         }
         
-        return {
-            "symbol": stock_id,
-            "large_shareholders": summary
-        }
+        reply_msg = (
+            f"📊 【{stock_id} 外資持股比例變化】\n"
+            f"資料比對日期: {summary['資料比對日期']}\n"
+            f"目前外資持股比例: {summary['目前外資持股比例']}\n"
+            f"外資持股週變化: {summary['外資持股週變化']}\n"
+        )
+        return reply_msg
     
     except Exception as e:
-        return {"error": f"抓取大戶持股時發生錯誤: {e}"}
+        return f"抓取大戶持股時發生錯誤: {e}"
 
 
-def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
+def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> str:
     """
     獲取個股歷史本益比，並計算出「歷史最高、最低、平均與目前位階」。
     將龐大的時間序列資料壓縮為 AI 容易理解的統計特徵。
@@ -283,7 +320,7 @@ def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
     print(f"正在計算 {stock_id} 過去 {years} 年的估值位階...")
     
     end_date = datetime.now()
-    start_date = end_date - datetime.timedelta(days=years * 365)
+    start_date = end_date - timedelta(days=years * 365)
     
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
@@ -298,7 +335,7 @@ def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
         data = res.json()
         
         if data.get("msg") != "success" or not data.get("data"):
-            return {"status": "error", "message": "查無本益比資料"}
+            return "查無本益比資料"
             
         records = data["data"]
         
@@ -334,34 +371,40 @@ def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
             "目前歷史位階": f"{round(position_percent, 2)}% (100%代表最貴，0%代表最便宜)"
         }
         
-        return {
-            "status": "success",
-            "symbol": stock_id,
-            "pe_evaluation": summary
-        }
+        reply_msg = (
+            f"📊 【{stock_id} 歷史本益比分析】\n"
+            f"資料區間: {summary['資料區間']}\n"
+            f"目前本益比: {summary['目前本益比']}\n"
+            f"歷史最高本益比: {summary['歷史最高本益比']}\n"
+            f"歷史最低本益比: {summary['歷史最低本益比']}\n"
+            f"歷史平均本益比: {summary['歷史平均本益比']}\n"
+            f"歷史中位數本益比: {summary['歷史中位數本益比']}\n"
+            f"目前歷史位階: {summary['目前歷史位階']}\n"
+        )
+        return reply_msg
 
     except Exception as e:
-        return {"status": "error", "message": f"計算估值位階時發生錯誤: {e}"}
+        return f"計算估值位階時發生錯誤: {e}"
 
 
-def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
+def fetch_us_historical_pe_bands(symbol: str, years: int = 3) -> str:
     print(f"正在分析 {symbol} 過去 {years} 年的美股估值數據...")
     
     ticker = yf.Ticker(symbol)
     
     # 1. 獲取歷史股價 (每日)
     end_date = datetime.now()
-    start_date = end_date - datetime.timedelta(days=years * 365 + 120) # 多取4個月以計算第一個TTM
+    start_date = end_date - timedelta(days=years * 365 + 120) # 多取4個月以計算第一個TTM
     hist = ticker.history(start=start_date, end=end_date)
     if hist.empty:
-        return {"status": "error", "message": "找不到股價資料"}
+        return "找不到股價資料"
     hist.index = hist.index.tz_localize(None)
 
     # 2. 獲取季度財報 (用於計算 EPS)
     # financials 包含每年的，quarterly_financials 包含每季的
     q_financials = ticker.quarterly_financials
     if q_financials.empty:
-        return {"status": "error", "message": "無法取得財務報表"}
+        return "無法取得財務報表"
 
     # 提取 Diluted EPS (稀釋後每股盈餘)
     if 'Diluted EPS' in q_financials.index:
@@ -369,7 +412,7 @@ def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
     elif 'Basic EPS' in q_financials.index:
         eps_data = q_financials.loc['Basic EPS']
     else:
-        return {"status": "error", "message": "報表中缺少 EPS 數據"}
+        return "報表中缺少 EPS 數據"
 
     # 3. 計算 TTM EPS (滾動四季加總)
     eps_series = eps_data.sort_index() # 由舊到新排序
@@ -377,7 +420,7 @@ def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
     ttm_eps.index = ttm_eps.index.tz_localize(None)
     
     if ttm_eps.empty:
-        return {"status": "error", "message": "EPS 數據不足以計算 TTM (需至少四季)"}
+        return "EPS 數據不足以計算 TTM (需至少四季)"
 
     # 4. 將 EPS 對齊到每日股價
     # 我們將 TTM EPS 擴展到每一天，直到下一次財報公佈
@@ -392,7 +435,7 @@ def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
     valid_pe = pe_df[pe_df['PE'] > 0]['PE']
     
     if valid_pe.empty:
-        return {"status": "error", "message": "該股票可能較新，暫無有效歷史本益比"}
+        return "該股票可能較新，暫無有效歷史本益比"
 
     # 6. 統計分析 (沿用你的邏輯)
     latest_pe = float(valid_pe.iloc[-1])
@@ -403,18 +446,29 @@ def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
 
     position_percent = ((latest_pe - min_pe) / (max_pe - min_pe)) * 100 if max_pe != min_pe else 50.0
 
-    return {
-        "status": "success",
-        "symbol": symbol,
-        "summary": {
-            "目前本益比": round(latest_pe, 2),
-            "歷史最高": round(max_pe, 2),
-            "歷史最低": round(min_pe, 2),
-            "歷史平均": round(avg_pe, 2),
-            "歷史中位數": round(median_pe, 2),
-            "目前位階": f"{round(position_percent, 2)}%"
-        }
-    }
+    reply_msg = (
+        f"📊 【{symbol} 美股歷史本益比分析】\n"
+        f"資料區間: 過去 {years} 年\n"
+        f"目前本益比: {round(latest_pe, 2)}\n"
+        f"歷史最高本益比: {round(max_pe, 2)}\n"
+        f"歷史最低本益比: {round(min_pe, 2)}\n"
+        f"歷史平均本益比: {round(avg_pe, 2)}\n"
+        f"歷史中位數本益比: {round(median_pe, 2)}\n"
+        f"目前歷史位階: {round(position_percent, 2)}% (100%代表最貴，0%代表最便宜)\n"
+    )
+    return reply_msg
+    # return {
+    #     "status": "success",
+    #     "symbol": symbol,
+    #     "summary": {
+    #         "目前本益比": round(latest_pe, 2),
+    #         "歷史最高": round(max_pe, 2),
+    #         "歷史最低": round(min_pe, 2),
+    #         "歷史平均": round(avg_pe, 2),
+    #         "歷史中位數": round(median_pe, 2),
+    #         "目前位階": f"{round(position_percent, 2)}%"
+    #     }
+    # }
 
 def getStockExcel(symbol: str):
     ticker = yf.Ticker(symbol)
@@ -428,9 +482,8 @@ def to_pct(val) -> str:
 
 
 if __name__ == "__main__":
-    stock_data = fetchStockFundamentals("MU")
-    for key, value in stock_data.items():
-        print(f"指標 | {key}: {value}")
+    stock_data = fetchStockFundamentals("2330")
+    print(stock_data)
 
     # tsmc_chip = fetchMarketLeverage("2330")
     # print(f"\n--- {tsmc_chip['symbol']} 籌碼面數據 ({tsmc_chip['period']}) ---")

@@ -3,7 +3,7 @@ import datetime
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-def findStockNews(company_name: str, maxResults: int = 5) -> dict:
+def findStockNews(company_name: str, maxResults: int = 5) -> str:
     """
     利用爬蟲套件，搜尋指定公司相關的新聞
     """
@@ -22,20 +22,22 @@ def findStockNews(company_name: str, maxResults: int = 5) -> dict:
             })
 
         if not news:
-            return {"message": "近期無相關新聞"}
+            return "近期無相關新聞"
         
-        return {
-            "company_name": company_name,
-            "news": news
-        }
+        reply_msg = f"【{company_name} 新聞】\n"
+        reply_msg += "=" * 20 + "\n"
+        for n in news:
+            reply_msg += f"標題: {n['title']}\n"
+            reply_msg += f"摘要: {n['content']}\n"
+            reply_msg += f"連結: {n['url']}\n"
+            reply_msg += "-" * 20 + "\n"
+
+        return reply_msg
         
     except Exception as e:
-        return {"error": f"搜尋過程中發生錯誤: {e}"}
+        return f"搜尋過程中發生錯誤: {e}"
 
 
 if __name__ == "__main__":
     news_data = findStockNews('台積電')
-    for idx, n in enumerate(news_data["news"]):
-        print(f"\n[{idx+1}] {n['title']}")
-        print(f"摘要: {n['content']}")
-        print(f"連結: {n['url']}")
+    print(news_data)

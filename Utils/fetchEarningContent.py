@@ -1,5 +1,5 @@
 import requests
-import datetime
+from datetime import datetime
 import json
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -11,7 +11,7 @@ def fetchMonthlyRevenue(stock_id: str) -> dict:
     print(f"正在檢索 {stock_id} 的最新月營收資料...")
     
     # 月營收每月公布一次，往前抓 120 天確保能拿到最近 3~4 個月的資料來算 MoM
-    end_date = datetime.datetime.now()
+    end_date = datetime.now()
     start_date = end_date - datetime.timedelta(days=120)
     
     url = "https://api.finmindtrade.com/api/v4/data"

@@ -63,9 +63,9 @@ def get_stock_info(target_str):
 
 if __name__ == "__main__":
     # 執行新函數
-    update_stock_name_mapping_file()
+    # update_stock_name_mapping_file()
     
-    # stock_name = get_stock_info("2330")
-    # print(f"輸入: 2330 -> 代碼: {stock_name[0]}, 名稱: {stock_name[1]}")
-    # stock_id = get_stock_info("台積電")
-    # print(f"輸入: 台積電 -> 代碼: {stock_id[0]}, 名稱: {stock_id[1]}")
+    stock_name = get_stock_info("2330")
+    print(f"輸入: 2330 -> 代碼: {stock_name[0]}, 名稱: {stock_name[1]}")
+    stock_id = get_stock_info("台積電")
+    print(f"輸入: 台積電 -> 代碼: {stock_id[0]}, 名稱: {stock_id[1]}")

@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 import json
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -102,7 +102,7 @@ def linebot(request):
                     else:
                         line_bot_api.push_message(userId, TextSendMessage(text=f"無法找到 {targetStock} 的股票資訊，請確認輸入的公司名稱是否正確。"))
                 if '最新漲跌停資訊' in inputText:
-                    today = datetime.datetime.now().strftime("%Y%m%d") # YYYYMMDD
+                    today = datetime.now().strftime("%Y%m%d") # YYYYMMDD
                     upDownLimitReport = fetchLimitUpDownStocks(today)
                     line_bot_api.push_message(userId, TextSendMessage(text=upDownLimitReport))
                 if '技術指標' in inputText:

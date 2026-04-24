@@ -3,24 +3,11 @@ import os
 import sys
 import yfinance as yf
 import requests
-import datetime
+from datetime import datetime
 import xml.etree.ElementTree as ET
 import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Dictionary.updateStockName import get_stock_info
-
-
-def fetchStockPrice(symbol: str) -> float:
-    """symbol: 股票代碼，例如 'AAPL' 或 '2330.TW'"""
-    try:
-        ticker = yf.Ticker(symbol)
-        # 取得即時股價 
-        current_price = ticker.fast_info.last_price
-        return round(current_price, 2)
-        
-    except Exception as e:
-        print(f"抓取 {symbol} 資訊時發生錯誤: {e}")
-        return 0
 
 
 def fetchStockFundamentals(symbol: str) -> dict:
@@ -29,16 +16,19 @@ def fetchStockFundamentals(symbol: str) -> dict:
     範例代碼：台股台積電 '2330.TW' 或 美股 ADR 'TSM'
     """
     print(f"正在檢索 {symbol} 的客觀財務與營運數據...")
-    if get_stock_info(symbol):
+    s_id, s_name = get_stock_info(symbol)
+    if s_id:
         symbol += '.TW'
 
     try:
         ticker = yf.Ticker(symbol)
         # 取得公司基本面與財務指標字典
         info = ticker.info
+        current_price = ticker.fast_info.last_price
 
         # 萃取法說會與市場最關注的「客觀硬數據」
         fundamentals = {
+            "目前股價": f"${round(current_price, 2)}",
             # 1. 營收與成長性 (替代月營收，觀察季營收年增率)
             "營收成長率 (YoY)": to_pct(info.get("revenueGrowth")),
             "盈餘成長率 (Earnings Growth)": to_pct(info.get("earningsGrowth")),
@@ -71,7 +61,7 @@ def fetchMarketLeverage(stock_id: str, days: int = 5) -> dict:
     """
     
     # 計算日期範圍
-    end_date = datetime.datetime.now()
+    end_date = datetime.now()
     start_date = end_date - datetime.timedelta(days=days + 4) # 多抓幾天避開假日
     
     start_str = start_date.strftime("%Y-%m-%d")
@@ -244,7 +234,7 @@ def fetchLargeShareholdersData(stock_id: str, days: int = 5) -> dict:
     """
     print(f"正在檢索 {stock_id} 的外資大戶持股動向...")
     
-    end_date = datetime.datetime.now()
+    end_date = datetime.now()
     start_date = end_date - datetime.timedelta(days)
     
     url = "https://api.finmindtrade.com/api/v4/data"
@@ -292,7 +282,7 @@ def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
     """
     print(f"正在計算 {stock_id} 過去 {years} 年的估值位階...")
     
-    end_date = datetime.datetime.now()
+    end_date = datetime.now()
     start_date = end_date - datetime.timedelta(days=years * 365)
     
     url = "https://api.finmindtrade.com/api/v4/data"
@@ -354,12 +344,83 @@ def fetch_historical_pe_bands(stock_id: str, years: int = 3) -> dict:
         return {"status": "error", "message": f"計算估值位階時發生錯誤: {e}"}
 
 
+def fetch_us_historical_pe_bands(symbol: str, years: int = 3):
+    print(f"正在分析 {symbol} 過去 {years} 年的美股估值數據...")
+    
+    ticker = yf.Ticker(symbol)
+    
+    # 1. 獲取歷史股價 (每日)
+    end_date = datetime.now()
+    start_date = end_date - datetime.timedelta(days=years * 365 + 120) # 多取4個月以計算第一個TTM
+    hist = ticker.history(start=start_date, end=end_date)
+    if hist.empty:
+        return {"status": "error", "message": "找不到股價資料"}
+    hist.index = hist.index.tz_localize(None)
+
+    # 2. 獲取季度財報 (用於計算 EPS)
+    # financials 包含每年的，quarterly_financials 包含每季的
+    q_financials = ticker.quarterly_financials
+    if q_financials.empty:
+        return {"status": "error", "message": "無法取得財務報表"}
+
+    # 提取 Diluted EPS (稀釋後每股盈餘)
+    if 'Diluted EPS' in q_financials.index:
+        eps_data = q_financials.loc['Diluted EPS']
+    elif 'Basic EPS' in q_financials.index:
+        eps_data = q_financials.loc['Basic EPS']
+    else:
+        return {"status": "error", "message": "報表中缺少 EPS 數據"}
+
+    # 3. 計算 TTM EPS (滾動四季加總)
+    eps_series = eps_data.sort_index() # 由舊到新排序
+    ttm_eps = eps_series.rolling(window=4).sum().dropna()
+    ttm_eps.index = ttm_eps.index.tz_localize(None)
+    
+    if ttm_eps.empty:
+        return {"status": "error", "message": "EPS 數據不足以計算 TTM (需至少四季)"}
+
+    # 4. 將 EPS 對齊到每日股價
+    # 我們將 TTM EPS 擴展到每一天，直到下一次財報公佈
+    pe_df = hist[['Close']].copy()
+    # 將 EPS 的日期標記為「生效日」（通常財報公告會有延遲，這裡簡化處理）
+    pe_df['ttm_eps'] = pd.Series(ttm_eps, index=ttm_eps.index).reindex(pe_df.index, method='ffill')
+    
+    # 5. 計算每日 PE
+    pe_df['PE'] = pe_df['Close'] / pe_df['ttm_eps']
+    
+    # 過濾無效值 (PE < 0 通常不具參考價值)
+    valid_pe = pe_df[pe_df['PE'] > 0]['PE']
+    
+    if valid_pe.empty:
+        return {"status": "error", "message": "該股票可能較新，暫無有效歷史本益比"}
+
+    # 6. 統計分析 (沿用你的邏輯)
+    latest_pe = float(valid_pe.iloc[-1])
+    max_pe = float(valid_pe.max())
+    min_pe = float(valid_pe.min())
+    avg_pe = float(valid_pe.mean())
+    median_pe = float(valid_pe.median())
+
+    position_percent = ((latest_pe - min_pe) / (max_pe - min_pe)) * 100 if max_pe != min_pe else 50.0
+
+    return {
+        "status": "success",
+        "symbol": symbol,
+        "summary": {
+            "目前本益比": round(latest_pe, 2),
+            "歷史最高": round(max_pe, 2),
+            "歷史最低": round(min_pe, 2),
+            "歷史平均": round(avg_pe, 2),
+            "歷史中位數": round(median_pe, 2),
+            "目前位階": f"{round(position_percent, 2)}%"
+        }
+    }
+
 def getStockExcel(symbol: str):
     ticker = yf.Ticker(symbol)
     balance_sheet = ticker.balance_sheet
     balance_sheet.to_excel(f"{symbol}_balance_sheet.xlsx")
     print(f"Excel 檔案已儲存！")
-
 
 def to_pct(val) -> str:
     # 輔助函數：將小數點轉為漂亮的百分比格式 (例如 0.531 -> 53.1%)
@@ -367,9 +428,9 @@ def to_pct(val) -> str:
 
 
 if __name__ == "__main__":
-    # stock_data = fetchStockFundamentals("2317")
-    # for key, value in stock_data.items():
-    #     print(f"指標 | {key}: {value}")
+    stock_data = fetchStockFundamentals("MU")
+    for key, value in stock_data.items():
+        print(f"指標 | {key}: {value}")
 
     # tsmc_chip = fetchMarketLeverage("2330")
     # print(f"\n--- {tsmc_chip['symbol']} 籌碼面數據 ({tsmc_chip['period']}) ---")
@@ -379,8 +440,8 @@ if __name__ == "__main__":
     #     print(f"{key}: {value:,.0f} 張 ({action})")
     # for key, value in tsmc_chip["margin_data"].items():
     #     print(f"{key}: {value}")
-    us_stock = fetch_us_stock_chips("SNDK")
-    print(us_stock)
+    # us_stock = fetch_us_stock_chips("SNDK")
+    # print(us_stock)
     # tsmc_large_shareholders = fetchLargeShareholdersData("2330", 4)
     # print(tsmc_large_shareholders)
     # print(f"\n--- {tsmc_large_shareholders['symbol']} 外資持股比例 ---")
@@ -391,3 +452,5 @@ if __name__ == "__main__":
     # print(f"\n--- {tsmc_pe_bands['symbol']} 歷史本益比評估 ---")
     # for key, value in tsmc_pe_bands["pe_evaluation"].items():
     #     print(f"{key}: {value}")
+    # us_pe_bands = fetch_us_historical_pe_bands("MU")
+    # print(us_pe_bands)

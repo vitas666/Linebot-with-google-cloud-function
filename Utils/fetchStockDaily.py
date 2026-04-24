@@ -1,5 +1,5 @@
+from datetime import datetime, timedelta
 import requests
-import datetime
 import yfinance as yf
 import pandas as pd
 import urllib3
@@ -27,6 +27,7 @@ def fetchLimitUpDownStocks(date_str: str) -> dict:
     try:
         res = requests.get(url, params=params, headers=headers, timeout=10, verify=False)
         res_json = res.json()
+        print(res_json)
         
         if res_json.get("stat") != "OK":
             return {"status": "error", "message": f"無法取得 {date_str} 的資料，可能是假日或尚未收盤。"}
@@ -118,13 +119,13 @@ def fetchLimitUpDownStocks(date_str: str) -> dict:
 
 def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
     """
-    獲取個股的經典技術指標 (MA, VOL, RSI, MACD, KD)，預設為台股大盤指數 (TAIEX)
+    獲取台股的經典技術指標 (MA, VOL, RSI, MACD, KD)，預設為台股大盤指數 (TAIEX)
     """
     print("正在透過 FinMind 獲取大盤現貨報價並計算技術指標...")
     
     # 抓取過去 1 年的資料，確保 MACD 和 KD 擁有完美的歷史收斂度
-    end_date = datetime.datetime.now()
-    start_date = end_date - datetime.timedelta(days=365)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=365)
     
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
@@ -233,7 +234,7 @@ def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
             kd_signal = "偏空"
 
         # 排版給 Line Bot
-        reply_text = f"【台股大盤技術面指標】\n"
+        reply_text = f"【{stock_symbol}技術面指標】\n"
         reply_text += "=" * 20 + "\n"
         reply_text += f"日期: {latest['date'].strftime('%Y-%m-%d')}\n"
         reply_text += f"• 收盤指數: {latest['Close']:.2f}\n"
@@ -251,14 +252,56 @@ def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
         return f"計算技術指標時發生錯誤: {e}"
 
 
+def get_us_market_indices():
+    """
+    獲取美股四大指數的最新報價與漲跌幅
+    """
+    # 定義指數名稱與對應的 Yahoo Finance 代號
+    indices = {
+        "道瓊工業指數": "^DJI",
+        "那斯達克指數": "^IXIC",
+        "費城半導體指數": "^SOX",
+        "標普500指數": "^GSPC"
+    }
+    
+    results = []
+    for name, ticker_symbol in indices.items():
+        ticker = yf.Ticker(ticker_symbol)
+        # 獲取最近 5 天的歷史資料 (抓取多天以防遇到週末或國定假日)
+        hist = ticker.history(period="5d")
+        
+        if len(hist) >= 2:
+            # 最新交易日收盤價
+            current_price = hist['Close'].iloc[-1]
+            # 前一交易日收盤價
+            previous_close = hist['Close'].iloc[-2]
+            # 計算漲跌幅 (%)
+            change_percent = ((current_price - previous_close) / previous_close) * 100
+            results.append({
+                "指數名稱": name,
+                "代號": ticker_symbol,
+                "最新報價": round(current_price, 2),
+                "漲跌幅 (%)": round(change_percent, 2)
+            })
+        else:
+            results.append({
+                "指數名稱": name,
+                "代號": ticker_symbol,
+                "最新報價": "獲取失敗",
+                "漲跌幅 (%)": "獲取失敗"
+            })
+
+    return results
+
+
 def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
     """
     獲取台灣期貨市場最重要的籌碼指標：「外資台指期未平倉淨口數」
     """
     print("正在調閱外資台指期未平倉籌碼...")
     
-    end_date = datetime.datetime.now()
-    start_date = end_date - datetime.timedelta(days)
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days)
     
     url = "https://api.finmindtrade.com/api/v4/data"
     params = {
@@ -335,7 +378,7 @@ def fetch_tx_foreign_open_interest(days: int = 7) -> dict:
 
 if __name__ == "__main__":
     # 測試一個確定的交易日 (請確保輸入的是台股有開盤的過去日期)
-    # test_date = datetime.datetime.now().strftime("%Y%m%d") # YYYYMMDD
+    # test_date = datetime.now().strftime("%Y%m%d") # YYYYMMDD
     
     # result = fetchLimitUpDownStocks(test_date)
     
@@ -353,6 +396,11 @@ if __name__ == "__main__":
     # print("\n--- 台指大盤技術指標 ---")
     # tw_index_indicators = fetch_tw_index_technical_indicators()
     # print(tw_index_indicators)
+
+    # us_market_indices = get_us_market_indices()
+    # print("\n--- 美股四大指數最新報價與漲跌幅 ---")
+    # for idx in us_market_indices:
+    #     print(f"{idx['指數名稱']} ({idx['代號']}): {idx['最新報價']} 點, 漲跌幅: {idx['漲跌幅 (%)']}%")
 
     print("\n--- 外資台指期未平倉籌碼 ---")
     foreign_oi = fetch_tx_foreign_open_interest(1)

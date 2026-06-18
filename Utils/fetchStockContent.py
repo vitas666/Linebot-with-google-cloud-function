@@ -482,28 +482,19 @@ def to_pct(val) -> str:
 
 
 if __name__ == "__main__":
-    stock_data = fetchStockFundamentals("2330")
-    print(stock_data)
+    # stock_data = fetchStockFundamentals("2303")
+    # print(stock_data)
 
-    # tsmc_chip = fetchMarketLeverage("2330")
-    # print(f"\n--- {tsmc_chip['symbol']} 籌碼面數據 ({tsmc_chip['period']}) ---")
-    # for key, value in tsmc_chip["chip_data"].items():
-    #     # 加上明顯的買賣指標，幫助 LLM 理解情緒
-    #     action = "買超" if value > 0 else "賣超"
-    #     print(f"{key}: {value:,.0f} 張 ({action})")
-    # for key, value in tsmc_chip["margin_data"].items():
-    #     print(f"{key}: {value}")
+    target_chip = fetchMarketLeverage("2303")
+    print(target_chip)
+
     # us_stock = fetch_us_stock_chips("SNDK")
     # print(us_stock)
-    # tsmc_large_shareholders = fetchLargeShareholdersData("2330", 4)
-    # print(tsmc_large_shareholders)
-    # print(f"\n--- {tsmc_large_shareholders['symbol']} 外資持股比例 ---")
-    # for key, value in tsmc_large_shareholders["large_shareholders"].items():
-    #     print(f"{key}: {value}")
+    target_large_shareholders = fetchLargeShareholdersData("2303", 4)
+    print(target_large_shareholders)
 
-    # tsmc_pe_bands = fetch_historical_pe_bands("2330", 3)
-    # print(f"\n--- {tsmc_pe_bands['symbol']} 歷史本益比評估 ---")
-    # for key, value in tsmc_pe_bands["pe_evaluation"].items():
-    #     print(f"{key}: {value}")
+    target_pe_bands = fetch_historical_pe_bands("2303", 3)
+    print(target_pe_bands)
+
     # us_pe_bands = fetch_us_historical_pe_bands("MU")
     # print(us_pe_bands)

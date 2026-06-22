@@ -2,6 +2,11 @@ from datetime import datetime, timedelta
 import requests
 import yfinance as yf
 import pandas as pd
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from Utils.fetchStockContent import fetchLargeShareholdersData
+from Utils.googleSearch import findStockNews
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -135,6 +140,160 @@ def fetchLimitUpDownStocks(date_str: str) -> str:
     except Exception as e:
         return {"status": "error", "message": f"抓取漲跌停資料時發生錯誤: {e}"}
 
+
+def fetch_top_20_most_active_tw() -> str:
+    """
+    透過台灣證券交易所 (TWSE) 官方 OpenAPI，
+    光速取得當日「上市成交量排名前 20 名」的熱力榜。
+    """
+    print("🇹🇼 正在呼叫台灣證交所 OpenAPI，獲取當日成交量 Top 20...")
+    
+    url = "https://openapi.twse.com.tw/v1/exchangeReport/MI_INDEX20"
+    
+    try:
+        # 官方 API 非常穩定，設 5 秒 timeout 綽綽有餘
+        res = requests.get(url, timeout=5) 
+        
+        if res.status_code != 200:
+            return f"⚠️ 證交所 API 回傳異常，狀態碼: {res.status_code}"
+            
+        data = res.json()
+        if not data:
+            return "⚠️ 今日集中市場尚未產生或查無交易資料。"
+
+        output_msg = f"🔥 【台股本日成交量 Top 20 熱力榜】\n"
+        output_msg += "=" * 30 + "\n"
+        
+        for item in data[:20]:
+            rank = int(item.get("Rank", 0))
+            stock_id = item.get("StockNo", "")
+            
+            # 證交所給的公司全名有時會帶全形空白，把它清除乾淨並限縮字數
+            name = item.get("Name", "").strip()[:10]
+            
+            # 💡 【核心物理轉換】證交所回傳的 TradeVolume 單位是「股」！
+            # 台灣散戶習慣看「張」，所以我們除以 1,000：
+            raw_shares = int(item.get("TradeVolume", 0))
+            volume_in_zhang = raw_shares // 1000
+            
+            # 轉換為 萬張 或 張，版面極度清爽
+            if volume_in_zhang >= 10_000:
+                vol_str = f"{volume_in_zhang / 10000:.1f}萬張"
+            else:
+                vol_str = f"{volume_in_zhang:,}張"
+
+            price_str = item.get("ClosingPrice", "0")
+            change_amount = item.get("Change", "0")
+            direction = item.get("Dir", "").strip() # '+', '-', 或代表平盤的奇怪標籤
+
+            # 💡 【高階算術】證交所 API 只給「漲跌幾元」，沒給「漲跌幅(%)」
+            # 我們自己逆推算回散戶愛看的百分比：
+            try:
+                price = float(price_str)
+                chg_val = float(change_amount)
+                
+                # 證交所 API 遇到平盤時，Dir 欄位會吐出像 '<p> </p>' 這種 XML 廢碼
+                if "p" in direction or direction == "" or chg_val == 0:
+                    change_str = "平盤 0.00%"
+                elif direction == "+":
+                    prev_close = price - chg_val
+                    pct = (chg_val / prev_close) * 100 if prev_close > 0 else 0
+                    change_str = f"🔺 +{pct:.2f}%"
+                elif direction == "-":
+                    prev_close = price + chg_val
+                    pct = (chg_val / prev_close) * 100 if prev_close > 0 else 0
+                    change_str = f"🔻 -{pct:.2f}%"
+                else:
+                    change_str = f"{direction} {chg_val}"
+            except:
+                price = 0.0
+                change_str = f"{direction} {change_amount}"
+
+            # 嚴格等寬排版
+            output_msg += f"[{rank:02d}] {stock_id:<5} {name:<6} | {vol_str:<7} | {change_str} (${price:.2f})\n"
+
+        output_msg += "=" * 30 + "\n"
+        output_msg += "💡 資料來源：台灣證券交易所官方 OpenAPI (集中市場)"
+        
+        return output_msg
+
+    except Exception as e:
+        return f"❌ 抓取台股熱門榜發生錯誤: {e}"
+
+
+def fetch_top_20_most_active_us() -> str:
+    """
+    攔截 Yahoo Finance 官方的「本日最熱門交易 (Most Actives)」隱藏 API，
+    光速抓取全美股成交量前 20 名的榜單（包含成交量、最新報價、漲跌幅）。
+    """
+    print("🇺🇸 正在攔截 Yahoo 伺服器，請求本日美股成交量 Top 20 榜單...")
+    
+    # 這是 Yahoo 網頁版背後真正在要資料的 Screener API
+    url = "https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved"
+    
+    params = {
+        "scrIds": "most_actives", # 參數指明要抓「成交量熱門榜」
+        "count": 20               # 精準拿前 20 名
+    }
+    
+    # ⚠️ 爬蟲鐵律：必須偽裝成正常的瀏覽器 User-Agent，否則 Yahoo 會送你 403 Forbidden
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        res = requests.get(url, params=params, headers=headers, timeout=10)
+        
+        if res.status_code != 200:
+            return f"⚠️ 無法取得榜單，Yahoo 回傳狀態碼: {res.status_code}"
+            
+        data = res.json()
+        result_list = data.get("finance", {}).get("result", [])
+        
+        if not result_list:
+            return "⚠️ 查無成交量排行資料。"
+            
+        # 所有的股票報價陣列都藏在這個 quotes 裡面
+        quotes = result_list[0].get("quotes", [])
+        
+        # 開始組裝給 Line Bot 的漂亮文字卡片
+        output_msg = f"🔥 【美股本日成交量 Top 20 熱力榜】\n"
+        output_msg += "=" * 30 + "\n"
+        
+        for rank, q in enumerate(quotes[:20], 1):
+            symbol = q.get("symbol", "N/A")
+            # 為了避免某些公司全名太長把 Line 版面撐爆，我們只取前10個字
+            name = q.get("shortName", "")[:10] 
+            price = q.get("regularMarketPrice", 0.0)
+            change_pct = q.get("regularMarketChangePercent", 0.0)
+            volume = q.get("regularMarketVolume", 0)
+            
+            # 💡 【UX 貼心設計】美股成交量單位是「股」，台灣人習慣看「張」或「萬」
+            # 我們把它優化成 M (百萬股) 或 萬股，大腦秒懂：
+            if volume >= 1_000_000:
+                vol_str = f"{volume / 1_000_000:.2f}M"
+            else:
+                vol_str = f"{volume / 10_000:.0f}萬"
+                
+            # 漲跌幅加上正負號與視覺化 Emoji
+            if change_pct > 0:
+                change_str = f"🔺 +{change_pct:.2f}%"
+            elif change_pct < 0:
+                change_str = f"🔻 {change_pct:.2f}%"
+            else:
+                change_str = "0.00%"
+
+            # 採用固定寬度排版，確保在 Line 裡面文字對齊
+            output_msg += f"[{rank:02d}] {symbol:<5} | {vol_str:<6} | {change_str} (${price:.2f})\n"
+        
+        output_msg += "=" * 30 + "\n"
+        output_msg += "💡 說明：M代表Million(百萬股)，數據為美股全市場即時/盤後統計。"
+        
+        return output_msg
+
+    except Exception as e:
+        return f"❌ 抓取熱門榜時發生錯誤: {e}"
+    
 
 def fetch_tw_index_technical_indicators(stock_symbol: str = "TAIEX") -> str:
     """
@@ -407,6 +566,81 @@ def fetch_tx_foreign_open_interest(days: int = 7) -> str:
         return f"抓取外資期貨籌碼時發生錯誤: {e}"
 
 
+def generate_daily_investment_report(user_stocks: list) -> str:
+    """
+    每日投資日報主控函數：
+    100% 尊重模組化設計，直接呼叫你寫好的各個獨立函數，並依序組裝成最終日報字串。
+    
+    執行順序：
+    1. 大盤焦點新聞 (findStockNews)
+    2. 台指期未平倉 (fetch_tx_foreign_open_interest)
+    3. 個人持股大戶籌碼 (迴圈呼叫 fetchLargeShareholdersData)
+    4. 成交量排名 (fetch_top_20_most_active_tw)
+    """
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    
+    # 建立日報的開頭標頭
+    report_segments = [
+        f"⭐️ 【台股每日投資日報｜{date_str}】 ⭐️\n" + "=\n"
+    ]
+    
+    # =========================================================================
+    # 1. 大盤焦點新聞
+    # =========================================================================
+    try:
+        # 直接呼叫你的新聞函數，依據你的減法思維，我們限額 maxResults=1
+        news_part = findStockNews(keyword='台股大盤', maxResults=1, hours_limit=48)
+        report_segments.append(news_part)
+    except Exception as e:
+        report_segments.append(f"❌ 讀取大盤焦點新聞時發生錯誤: {e}")
+
+    # =========================================================================
+    # 2. 台指期未平倉
+    # =========================================================================
+    try:
+        # 直接呼叫你的期貨未平倉功能
+        futures_part = fetch_tx_foreign_open_interest()
+        report_segments.append(futures_part)
+    except Exception as e:
+        report_segments.append(f"❌ 讀取期貨未平倉數據時發生錯誤: {e}")
+
+    # =========================================================================
+    # 3. 個人持股大戶籌碼
+    # =========================================================================
+    portfolio_lines = ["🎯 【個人持股大戶籌碼動態】"]
+    if not user_stocks:
+        portfolio_lines.append("• 目前尚未設定追蹤任何自選持股。")
+    else:
+        for stock_id in user_stocks:
+            try:
+                # 迴圈呼叫你的股權分散表函數，一檔一檔拉出來
+                stock_chip_info = fetchLargeShareholdersData(stock_id, days=5)
+                portfolio_lines.append(stock_chip_info)
+            except Exception as e:
+                portfolio_lines.append(f"• {stock_id} 籌碼查詢失敗: {e}")
+                
+    # 將個人持股部分用換行組合起來，塞進大報告中
+    report_segments.append("\n".join(portfolio_lines))
+
+    # =========================================================================
+    # 4. 成交量排名
+    # =========================================================================
+    try:
+        # 直接呼叫你寫的 Top 20 集中市場熱力榜
+        volume_rank_part = fetch_top_20_most_active_tw()
+        report_segments.append(volume_rank_part)
+    except Exception as e:
+        report_segments.append(f"❌ 讀取成交量排行榜時發生錯誤: {e}")
+
+    # =========================================================================
+    # 最終組裝
+    # =========================================================================
+    # 用優雅的雙分隔線，把這四個獨立 Function 吐出來的文字黏接成一大封訊息
+    final_report_str = "\n\n" + "\n\n".join(report_segments) + "\n\n" + "=" * 25
+    
+    return final_report_str
+
+
 if __name__ == "__main__":
     # 測試一個確定的交易日 (請確保輸入的是台股有開盤的過去日期)
     # test_date = datetime.now().strftime("%Y%m%d") # YYYYMMDD
@@ -418,9 +652,22 @@ if __name__ == "__main__":
     # tw_index_indicators = fetch_tw_index_technical_indicators()
     # print(tw_index_indicators)
 
-    us_market_indices = get_us_market_indices()
-    print(us_market_indices)
+    # us_market_indices = get_us_market_indices()
+    # print(us_market_indices)
+
+    # print("\n--- 台股熱門榜 ---")
+    # top_stocks = fetch_top_20_most_active_tw()
+    # print(top_stocks)
+
+    # print("\n--- 美股熱門榜 ---")
+    # top_us_stocks = fetch_top_20_most_active_us()
+    # print(top_us_stocks)
 
     # print("\n--- 外資台指期未平倉籌碼 ---")
     # foreign_oi = fetch_tx_foreign_open_interest(1)
     # print(foreign_oi)
+
+    print("\n--- 每日投資日報 ---")
+    user_stocks = ["2330", "2303", "00631L"]
+    daily_report = generate_daily_investment_report(user_stocks)
+    print(daily_report)

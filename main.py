@@ -4,9 +4,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, StickerSendMessage
 from DB.DBConnection import get_recent_chat_history, save_chat_message, save_form_response, init_database
-from Utils.fetchStockDaily import fetch_tw_index_technical_indicators, fetch_tx_foreign_open_interest, fetchLimitUpDownStocks
+from Utils.fetchStockDaily import fetch_tw_index_technical_indicators, fetch_tx_foreign_open_interest, fetchLimitUpDownStocks, generate_daily_investment_report
 from Utils.googleSearch import findStockNews
-from googleDrive import userRegister
+from googleDrive import userRegister, registerNewUser
 from Utils.dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
 from Dictionary.updateStockName import get_stock_info
@@ -30,17 +30,19 @@ def linebot(request):
             
             # if the event is follow event, register the user name then return, if not, continue
             if json_data['events'][0]['type'] == 'follow':
-                line_bot_api.push_message(userId, TextSendMessage(
-                    text='第一次加好友, 請在聊天室回覆您的真實姓名, 作為奉獻資訊的紀錄'))
+                userProfile = line_bot_api.get_profile(userId)
+                line_display_name = userProfile.display_name
+                if(registerNewUser(userId, line_display_name)):
+                    line_bot_api.push_message(userId, TextSendMessage(text=f'歡迎加入！{line_display_name}，系統已為您建立專屬檔案'))
                 return 'OK'
             # only accept the message events
             if json_data['events'][0]['type'] == 'message':
                 inputText = json_data['events'][0]['message']['text']
-                registerStatus = userRegister(userId, inputText)
-                print('this is register status: ', registerStatus)
-                if registerStatus == 'update uid successful':
-                    line_bot_api.push_message(userId, TextSendMessage(text='註冊成功'))
-                    return 'OK'
+                # registerStatus = userRegister(userId, inputText)
+                
+                # if registerStatus == 'update uid successful':
+                #     line_bot_api.push_message(userId, TextSendMessage(text='註冊成功'))
+                #     return 'OK'
                 # if registerStatus == 'name is not on the sheet':
                 #     line_bot_api.push_message(userId, TextSendMessage(text='您的名字不在註冊清單上, 請聯絡財務團隊或It團隊'))
                 #     return 'OK'
@@ -131,6 +133,10 @@ def linebot(request):
                     stock_id, stock_name = get_stock_info(targetStock)
                     historicalPE = fetch_historical_pe_bands(stock_id)
                     line_bot_api.push_message(userId, TextSendMessage(text=historicalPE))
+                if '每日投資日報' in inputText:
+                    user_stocks = ["2330", "2303", "1808"]  # 這裡可以改成從使用者資料庫抓取使用者的持股清單
+                    daily_report = generate_daily_investment_report(user_stocks)
+                    line_bot_api.push_message(userId, TextSendMessage(text=daily_report))
 
                 # msg = responseByAI(json_data['events'][0]['message']['text'])
                 # line_bot_api.reply_message(tk, TextSendMessage(text=msg))
@@ -171,6 +177,10 @@ def linebot(request):
 
 # 功能五：提供投資組合績效報告
 # 每月或者每季提供一次投資組合績效報告，讓使用者了解自己的投資表現以及需要調整的地方
+
+# 功能六：可以傳給使用者一個每日投資報告，包含當天的市場總覽，持股表現，以及相關新聞摘要
+# 內容涵蓋：台指期三大法人未平倉變化、技術指標分析、外資持股變化
+# 美國伊朗相關新聞，聯準會政策變化
 
 # Note: 我需要拍一個教學影片可以讓使用者知道每一個功能分別是幹嘛用的
 

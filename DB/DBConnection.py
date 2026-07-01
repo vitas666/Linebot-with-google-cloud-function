@@ -25,21 +25,48 @@ db_pool = mysql.connector.pooling.MySQLConnectionPool(
 def get_connection():
     return db_pool.get_connection()
 
-def connect_to_database():
+def test_database_connection():
+    conn = None
+    cursor = None
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM USERS")
-        records = cursor.fetchall()
-        for row in records:
-            print(row)
+
+        # 1. 確認實際連到哪一個 database (排除連錯 schema 的可能)
+        cursor.execute("SELECT DATABASE()")
+        current_db = cursor.fetchone()[0]
+        print(f"目前連線的 database: {current_db}")
+
+        # 2. 列出此 database 下所有的 table (確認 table 是否存在、名稱大小寫)
+        cursor.execute("SHOW TABLES")
+        tables = cursor.fetchall()
+        if tables:
+            print(f"共有 {len(tables)} 個 table:")
+            for t in tables:
+                print(f"  - {t[0]}")
+        else:
+            print("這個 database 底下沒有任何 table。")
+
+        for t in tables:
+            table_name = t[0]
+            try:
+                # 這裡使用 f-string 帶入 table 名稱。
+                # 注意：資料表名稱不能當作 cursor.execute(sql, params) 的參數帶入，必須直接組進 SQL 字串中。
+                cursor.execute(f"SELECT COUNT(*) FROM `{table_name}`")
+                count = cursor.fetchone()[0]
+                print(f"  - [{table_name}]: {count} rows")
+                
+            except mysql.connector.Error as table_err:
+                # 預防某些 table 因為權限或其他原因無法讀取時，不影響其他 table 的檢查
+                print(f"  - [{table_name}]: 無法查詢資料筆數 (錯誤: {table_err})")
 
     except mysql.connector.Error as e:
         print(f"Error: {e}")
 
     finally:
-        if conn and conn.is_connected():
+        if cursor:
             cursor.close()
+        if conn and conn.is_connected():
             conn.close()
             print("Connection closed")
 
@@ -104,8 +131,28 @@ def init_database():
         );
         """
 
+        # 5. 股票代碼與名稱對照表
+        table_stock_name = """
+        CREATE TABLE IF NOT EXISTS stock_name_mapping (
+            stock_id VARCHAR(50) PRIMARY KEY,
+            stock_name VARCHAR(255) NOT NULL
+        );
+        """
+
+        # 6. 使用者持股明細表 (由 Google 表單解析而來)
+        table_holdings = """
+        CREATE TABLE IF NOT EXISTS user_holdings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_name VARCHAR(255) NOT NULL,      -- Line 顯示名稱
+            stock_name VARCHAR(255) NOT NULL,     -- 持股名稱 (代碼或公司/基金名稱)
+            amount BIGINT,                        -- 對應的持股金額 (新台幣，整數)
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_user_name (user_name)
+        );
+        """
+
         # 依序執行所有建立資料表的 SQL
-        for sql in [table_form, table_investment, table_chat, table_porfolio]:
+        for sql in [table_form, table_investment, table_chat, table_porfolio, table_stock_name, table_holdings]:
             cursor.execute(sql)
             
         conn.commit()
@@ -278,3 +325,194 @@ def get_user_specific_strategy(user_id: str):
             cursor.close()
             conn.close()
 
+
+def save_stock_name_mapping(name_mapping: dict):
+    """
+    將股票代碼與名稱的對照表批次寫入 MySQL 的 stock_name_mapping 資料表。
+    若代碼已存在則更新名稱 (upsert)。
+
+    - name_mapping (dict): {stock_id: stock_name} 形式的對照表
+    - 成功時回傳寫入的筆數，失敗則回傳 0
+    """
+    if not name_mapping:
+        print("沒有可寫入的股票名稱資料。")
+        return 0
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 確保資料表存在
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_name_mapping (
+            stock_id VARCHAR(50) PRIMARY KEY,
+            stock_name VARCHAR(255) NOT NULL
+        );
+        """)
+
+        sql = """
+        INSERT INTO stock_name_mapping (stock_id, stock_name)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE stock_name = VALUES(stock_name)
+        """
+        values = list(name_mapping.items())
+
+        cursor.executemany(sql, values)
+        conn.commit()
+
+        print(f"成功寫入 {cursor.rowcount} 筆股票名稱對照資料。")
+        return len(values)
+
+    except Error as e:
+        print(f"寫入股票名稱對照表時發生錯誤: {e}")
+        if conn:
+            conn.rollback()
+        return 0
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def get_stock_info_from_db(target_str: str):
+    """
+    從 MySQL 的 stock_name_mapping 撈取股票資訊。
+    不管輸入「代號」還是「名稱」，都能回傳 (代號, 名稱)；找不到回傳 (None, None)。
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        sql = """
+        SELECT stock_id, stock_name
+        FROM stock_name_mapping
+        WHERE stock_id = %s OR stock_name = %s
+        LIMIT 1
+        """
+        cursor.execute(sql, (target_str, target_str))
+        row = cursor.fetchone()
+
+        if row:
+            return row[0], row[1]
+        return None, None
+
+    except Error as e:
+        print(f"讀取股票名稱對照表時發生錯誤: {e}")
+        return None, None
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def save_user_holdings(user_name: str, holdings: list):
+    """
+    將某位使用者的持股清單寫入 MySQL 的 user_holdings 資料表。
+    採「先刪後增」策略：每次寫入前先清掉該使用者的舊持股，再存入最新清單，
+    避免重複填表造成資料累積。
+
+    - user_name (str): Line 顯示名稱
+    - holdings (list): [{"stock_name": "台積電", "amount": 200000}, ...]
+    - 成功時回傳寫入的筆數，失敗則回傳 0
+    """
+    if not user_name:
+        print("缺少 user_name，無法寫入持股資料。")
+        return 0
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 確保資料表存在
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_holdings (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_name VARCHAR(255) NOT NULL,
+            stock_name VARCHAR(255) NOT NULL,
+            amount BIGINT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_user_name (user_name)
+        );
+        """)
+
+        # 1. 先刪除該使用者的舊持股
+        cursor.execute("DELETE FROM user_holdings WHERE user_name = %s", (user_name,))
+
+        # 2. 過濾出有效持股 (需有名稱)，並插入
+        values = [
+            (user_name, h.get("stock_name"), h.get("amount"))
+            for h in holdings
+            if h.get("stock_name")
+        ]
+
+        if values:
+            sql = """
+            INSERT INTO user_holdings (user_name, stock_name, amount)
+            VALUES (%s, %s, %s)
+            """
+            cursor.executemany(sql, values)
+
+        conn.commit()
+        print(f"成功更新 {user_name} 的持股，共 {len(values)} 筆。")
+        return len(values)
+
+    except Error as e:
+        print(f"寫入持股資料時發生錯誤: {e}")
+        if conn:
+            conn.rollback()
+        return 0
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def get_user_holdings(user_name: str):
+    """
+    讀取某位使用者目前的持股清單。
+
+    - user_name (str): Line 顯示名稱
+    - 回傳 list[dict]，例如：
+        [{"stock_name": "台積電", "amount": 200000}, ...]
+      找不到或發生錯誤時回傳空清單 []。
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        sql = """
+        SELECT stock_name, amount
+        FROM user_holdings
+        WHERE user_name = %s
+        ORDER BY amount DESC
+        """
+        cursor.execute(sql, (user_name,))
+        return cursor.fetchall()
+
+    except Error as e:
+        print(f"讀取持股資料時發生錯誤: {e}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+if __name__ == "__main__":
+    # 測試資料庫連線與初始化
+    test_database_connection()

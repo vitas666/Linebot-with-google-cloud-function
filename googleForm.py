@@ -9,38 +9,48 @@ import config
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
 from Dictionary.InvestmentPlan import investment_plans
+from DB.DBConnection import save_user_holdings
+
+# 表單中對應的題目 ID
+NAME_QUESTION_ID = "2e4edcf0"       # 您的Line顯示名稱為？
+HOLDINGS_QUESTION_ID = "5ccb5137"   # 您現在在金融市場的持倉情況
 
 # Google Forms API 需要的 scope
-SCOPES = ['https://www.googleapis.com/auth/forms.responses.readonly']
+SCOPES = [
+    'https://www.googleapis.com/auth/forms.responses.readonly',
+    'https://www.googleapis.com/auth/forms.body.readonly'
+]
 SERVICE_ACCOUNT_FILE = config.LINEBOT_SERVICE_ACCOUNT_FILE_NAME
 FORM_ID = config.GOOGLE_FORM_URL_ID  #使用service account的話，id要拿編輯狀態的，不能拿預覽狀態的
+CREDENTIALS = service_account.Credentials.from_service_account_file(
+    SERVICE_ACCOUNT_FILE,
+    scopes=SCOPES,
+)
 
-get_test_txt = "{'responses': [{'responseId': 'ACYDBNgqb6A3tXAGktdNqvm8rCVPnBlkszXAqqL6WmO6Nakkvhvu9VD_qkiVYQx7u_abcRc', 'createTime': '2026-02-10T07:11:41.267Z', 'lastSubmittedTime': '2026-02-10T07:11:41.267201Z', 'answers': {'39da25f3': {'questionId': '39da25f3', 'textAnswers': {'answers': [{'value': '單身/沒有扶養義務'}]}}, '5be54049': {'questionId': '5be54049', 'textAnswers': {'answers': [{'value': '股票/ETF/期貨/虛擬貨幣/金融商品'}]}}, '73e938fa': {'questionId': '73e938fa', 'textAnswers': {'answers': [{'value': '沒有'}]}}, '17e95034': {'questionId': '17e95034', 'textAnswers': {'answers': [{'value': '個股佔比大於ETF'}]}}, '308f6275': {'questionId': '308f6275', 'textAnswers': {'answers': [{'value': '暫時沒有'}]}}, '60483d20': {'questionId': '60483d20', 'textAnswers': {'answers': [{'value': '一年以上'}]}}, '35a2cdf3': {'questionId': '35a2cdf3', 'textAnswers': {'answers': [{'value': '房租'}]}}, '113225a5': {'questionId': '113225a5', 'textAnswers': {'answers': [{'value': '30'}]}}, '566fef82': {'questionId': '566fef82', 'textAnswers': {'answers': [{'value': '部分賣出，考慮低點加碼'}]}}}}]}"
+
+def get_google_form_structure() -> dict:
+    """
+    使用 Google Forms API 取得表單結構（包含問題清單），只有修改問題的時候會用到，基本上不需要頻繁呼叫
+    """
+    authed_session = AuthorizedSession(CREDENTIALS)
+    url = f"https://forms.googleapis.com/v1/forms/{FORM_ID}"
+    response = authed_session.get(url)
+    response.raise_for_status()
+    return response.json()
+
 
 def get_google_form_responses() -> str:
     """
-    使用 Google Forms API 取得表單回應，純string
+    使用 Google Forms API 取得表單所有回應，純string
     """
-    # 用 Service Account 的 json 來構造憑證
-    credentials = service_account.Credentials.from_service_account_file(
-        SERVICE_ACCOUNT_FILE,
-        scopes=SCOPES,
-    )
-
-    # 建立 authorized session
-    authed_session = AuthorizedSession(credentials)
-
-    # API endpoint（v1）
+    authed_session = AuthorizedSession(CREDENTIALS)
     url = f"https://forms.googleapis.com/v1/forms/{FORM_ID}/responses"
-
     response = authed_session.get(url)
     response.raise_for_status()
-
     data = response.json()
-    # 例如 data["responses"] 就是所有回應
     return data
-    
-    
+
+
 def get_struct_answers(answers_input: str) -> dict:
     clean_answers = []
     answers_dict = ast.literal_eval(answers_input)
@@ -71,6 +81,89 @@ def get_struct_answers(answers_input: str) -> dict:
         "create_time": create_time,
         "structured_answers": clean_answers
     }
+
+
+def parse_holdings_with_ai(holdings_text: str) -> list:
+    """
+    使用 AI 將使用者填寫的自由文字持倉，解析成結構化清單。
+
+    輸入範例：
+        "006208 5萬\n00894 12000\nMU10000\n富蘭克林全球高科技美元A基金40000"
+    回傳範例：
+        [
+            {"stock_name": "006208", "amount": 50000},
+            {"stock_name": "00894", "amount": 12000},
+            {"stock_name": "MU", "amount": 10000},
+            {"stock_name": "富蘭克林全球高科技美元A基金", "amount": 40000}
+        ]
+
+    - 若使用者填「無」或沒有持股，回傳空清單 []
+    """
+    if not holdings_text or holdings_text.strip() in ("", "無", "使用者無回答"):
+        return []
+
+    prompt = f"""
+    你是一個資料解析器。請將下方使用者填寫的「金融市場持倉」自由文字，
+    拆解成結構化的持股清單。
+
+    【解析規則】
+    1. 每一筆持股包含「持股名稱」與「持股金額」。
+    2. 持股名稱可能是股票代碼(如 006208)、公司名稱(如 台積電)、或基金全名。
+    3. 金額請一律換算成「新台幣整數」：例如「5萬」= 50000、「20萬」= 200000、「12000」= 12000。
+    4. 名稱與金額之間可能有空格，也可能沒有(例如 MU10000 代表名稱 MU、金額 10000)。
+    5. 若某筆無法判斷金額，amount 請填 null。
+    6. 若使用者表示沒有持股(例如「無」)，請回傳空陣列 []。
+
+    【使用者填寫內容】
+    {holdings_text}
+
+    【輸出格式要求】
+    只回傳一個乾淨的 JSON 陣列，不要有任何說明文字或 markdown 標記，格式如下：
+    [
+        {{"stock_name": "台積電", "amount": 200000}}
+    ]
+    """
+
+    ai_result = responseByAI(prompt)
+    raw = ai_result.get("text_content", "").strip()
+
+    # 移除 AI 可能加上的 markdown code fence
+    if raw.startswith("```"):
+        raw = raw.strip("`")
+        # 去掉開頭可能的 "json" 標記
+        if raw.lower().startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+
+    try:
+        holdings = json.loads(raw)
+        if isinstance(holdings, list):
+            return holdings
+        print("AI 回傳的持倉資料不是陣列格式。")
+        return []
+    except json.JSONDecodeError:
+        print(f"解析持倉 JSON 失敗，原始回傳：{raw}")
+        return []
+
+
+def save_holdings_from_response(response: dict) -> int:
+    """
+    從單筆 Google 表單回應中，取出使用者名稱與持倉文字，
+    透過 AI 解析後寫入 user_holdings 資料表。
+
+    - response (dict): get_google_form_responses() 回傳的 responses 陣列中的單一元素
+    - 回傳寫入的持股筆數
+    """
+    answers = response.get("answers", {})
+    user_name = answers[NAME_QUESTION_ID]["textAnswers"]["answers"][0]["value"]
+    holdings_text = answers[HOLDINGS_QUESTION_ID]["textAnswers"]["answers"][0]["value"]
+
+    if not user_name:
+        print("此回應缺少 Line 顯示名稱，略過持股寫入。")
+        return 0
+
+    holdings = parse_holdings_with_ai(holdings_text)
+    return save_user_holdings(user_name, holdings)
 
 
 def AIResponseToForm(form_responses: dict) -> dict:
@@ -139,3 +232,10 @@ def AIResponseToForm(form_responses: dict) -> dict:
         }
     }
 
+if __name__ == "__main__":
+    # form = get_google_form_structure()
+    # print(json.dumps(form, indent=2, ensure_ascii=False))
+    responses = get_google_form_responses()
+    print(json.dumps(responses, indent=2, ensure_ascii=False))
+    # saved_count = save_holdings_from_response(responses['responses'][0])
+    # print(f"已寫入 {saved_count} 筆持股資料。")

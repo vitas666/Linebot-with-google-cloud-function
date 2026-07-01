@@ -3,14 +3,14 @@ import json
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, StickerSendMessage
-from DB.DBConnection import get_recent_chat_history, save_chat_message, save_form_response, init_database
+from DB.DBConnection import get_recent_chat_history, save_chat_message, save_form_response, init_database, get_user_holdings
 from Utils.fetchStockDaily import fetch_tw_index_technical_indicators, fetch_tx_foreign_open_interest, fetchLimitUpDownStocks, generate_daily_investment_report
 from Utils.googleSearch import findStockNews
 from googleDrive import userRegister, registerNewUser
 from Utils.dateHelper import allSaturdays, allSundays, lastSaturday, lastSunday
 import config
 from Dictionary.updateStockName import get_stock_info
-from googleForm import get_google_form_responses, AIResponseToForm, get_struct_answers
+from googleForm import get_google_form_responses, AIResponseToForm, get_struct_answers, save_holdings_from_response
 from Utils.utils import sendMsgByRequest, messageToSend
 from Utils.fetchEarningContent import fetchMonthlyRevenue, fetchMaterialInformation
 from Utils.fetchStockContent import fetch_historical_pe_bands, fetchLargeShareholdersData, fetchMarketLeverage, fetchStockFundamentals
@@ -60,11 +60,18 @@ def linebot(request):
                     structAnswers = get_struct_answers(formResponse)
                     response_id = structAnswers['response_id']
                     create_time = structAnswers['create_time']
-                    text = AIResponseToForm(structAnswers)['analysis_result']
-                    token_usage = AIResponseToForm(structAnswers)['token_usage']
+
+                    # 只呼叫一次 AI，避免重複分析與重複計費
+                    ai_result = AIResponseToForm(structAnswers)
+                    text = ai_result['analysis_result']
+                    token_usage = ai_result['token_usage']
+
+                    # 1. 儲存表單原始回應
                     save_form_response(structAnswers)
+
+                    # 2. 儲存 AI 回應為聊天紀錄
                     save_chat_message(
-                        user_id=userId, 
+                        user_id=userId,
                         session_id=response_id, # 可以用表單 ID 作為這次諮詢的 session_id
                         role='ai',
                         message=text,
@@ -72,8 +79,18 @@ def linebot(request):
                         completion_tokens=token_usage["completion_tokens"],
                         total_tokens=token_usage["total_tokens"]
                     )
+
+                    # 3. 解析並儲存使用者的持股情況 (取最新一筆表單回應)
+                    holdings_count = 0
+                    try:
+                        latest_response = formResponse['responses'][0]
+                        holdings_count = save_holdings_from_response(latest_response)
+                    except (KeyError, IndexError) as e:
+                        print('無法取得表單回應以儲存持股: ', e)
+
                     line_bot_api.push_message(userId, TextSendMessage(text=text))
                     print('this is form response: ', formResponse)
+                    print(f'已儲存 {holdings_count} 筆持股資料')
                     return 'OK'
                 if inputText == 'RAG測試':
                     init_database()

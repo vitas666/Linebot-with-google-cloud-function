@@ -139,6 +139,15 @@ def init_database():
         );
         """
 
+        # 0. 使用者基本資料表 (以 Line UID 為主鍵，取代原本存在 Google Sheet 的對照)
+        table_users = """
+        CREATE TABLE IF NOT EXISTS USERS (
+            uid VARCHAR(255) PRIMARY KEY,          -- Line User ID
+            user_name VARCHAR(255) NOT NULL,       -- Line 顯示名稱
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
         # 6. 使用者持股明細表 (由 Google 表單解析而來)
         table_holdings = """
         CREATE TABLE IF NOT EXISTS user_holdings (
@@ -152,7 +161,7 @@ def init_database():
         """
 
         # 依序執行所有建立資料表的 SQL
-        for sql in [table_form, table_investment, table_chat, table_porfolio, table_stock_name, table_holdings]:
+        for sql in [table_users, table_form, table_investment, table_chat, table_porfolio, table_stock_name, table_holdings]:
             cursor.execute(sql)
             
         conn.commit()
@@ -513,6 +522,124 @@ def get_user_holdings(user_name: str):
         if conn and conn.is_connected():
             conn.close()
 
+
+def register_user(uid: str, user_name: str) -> bool:
+    """
+    將使用者的 Line UID 與顯示名稱寫入 MySQL 的 USERS 資料表。
+    (取代原本存放於 Google Sheet 的做法)
+
+    - 若該 uid 尚未存在 -> 新增，回傳 True (代表這是新註冊的使用者)
+    - 若該 uid 已存在   -> 更新顯示名稱 (使用者可能改名)，回傳 False
+
+    - uid (str): Line User ID
+    - user_name (str): Line 顯示名稱
+    """
+    if not uid:
+        print("缺少 uid，無法註冊使用者。")
+        return False
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        # 確保資料表存在
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS USERS (
+            uid VARCHAR(255) PRIMARY KEY,
+            user_name VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        sql = """
+        INSERT INTO USERS (uid, user_name)
+        VALUES (%s, %s)
+        ON DUPLICATE KEY UPDATE user_name = VALUES(user_name)
+        """
+        cursor.execute(sql, (uid, user_name))
+        conn.commit()
+
+        # cursor.rowcount == 1 代表是新插入的一筆 (全新使用者)
+        is_new_user = cursor.rowcount == 1
+        if is_new_user:
+            print(f"新使用者註冊成功: {user_name} ({uid})")
+        else:
+            print(f"使用者已存在，已更新顯示名稱: {user_name} ({uid})")
+        return is_new_user
+
+    except Error as e:
+        print(f"註冊使用者時發生錯誤: {e}")
+        if conn:
+            conn.rollback()
+        return False
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def get_user_by_uid(uid: str):
+    """
+    以 Line UID 為索引，取得使用者的基本資料。
+
+    - uid (str): Line User ID
+    - 回傳 dict，例如 {"uid": "...", "user_name": "...", "created_at": ...}
+      找不到或發生錯誤時回傳 None。
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute(
+            "SELECT uid, user_name, created_at FROM USERS WHERE uid = %s",
+            (uid,)
+        )
+        return cursor.fetchone()
+
+    except Error as e:
+        print(f"讀取使用者資料時發生錯誤: {e}")
+        return None
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
+def get_all_user_uids():
+    """
+    取得所有已註冊使用者的 UID 清單 (例如用於群發推播)。
+
+    - 回傳 list[str]，找不到或發生錯誤時回傳空清單 []。
+    """
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT uid FROM USERS")
+        return [row[0] for row in cursor.fetchall()]
+
+    except Error as e:
+        print(f"讀取使用者清單時發生錯誤: {e}")
+        return []
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+
 if __name__ == "__main__":
     # 測試資料庫連線與初始化
     test_database_connection()
+    print(get_user_holdings("YongHan"))

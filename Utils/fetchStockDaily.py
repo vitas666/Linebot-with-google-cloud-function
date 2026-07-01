@@ -7,6 +7,9 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Utils.fetchStockContent import fetchLargeShareholdersData
 from Utils.googleSearch import findStockNews
+from DB.DBConnection import get_user_holdings
+from GenerativeAI import responseByAI
+from DB.DBConnection import get_user_holdings
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -566,18 +569,60 @@ def fetch_tx_foreign_open_interest(days: int = 7) -> str:
         return f"抓取外資期貨籌碼時發生錯誤: {e}"
 
 
-def generate_daily_investment_report(user_stocks: list) -> str:
+def generate_portfolio_advice(holdings: list) -> str:
+    """
+    根據使用者的持股清單 (含名稱與金額)，呼叫 AI 給予個人化的投資建議。
+    """
+    if not holdings:
+        return "🤖 【AI 個人化投資建議】\n目前尚未設定任何持股，無法提供個人化建議。"
+
+    total_amount = sum(h.get("amount") or 0 for h in holdings)
+    holdings_lines = []
+    for h in holdings:
+        stock_name = h.get("stock_name")
+        amount = h.get("amount") or 0
+        weight = (amount / total_amount * 100) if total_amount else 0
+        holdings_lines.append(f"- {stock_name}：新台幣 {amount:,} 元 (佔比 {weight:.1f}%)")
+    holdings_text = "\n".join(holdings_lines)
+
+    prompt = f"""
+    你是一位專業且謹慎的理財顧問。以下是某位使用者目前的持股明細：
+
+    {holdings_text}
+
+    總投資金額：新台幣 {total_amount:,} 元
+
+    請根據以上持股狀況，給予這位使用者投資建議，內容需包含：
+    1. 資產配置與集中度分析 (是否過度集中在單一標的、產業或地區)
+    2. 目前配置的風險與潛在機會
+    3. 2-3 點具體且可執行的調整建議
+
+    語氣專業但親切，控制在 300 字以內，並使用繁體中文條列呈現。
+    """
+
+    try:
+        ai_result = responseByAI(prompt)
+        advice_text = ai_result["text_content"]
+    except Exception as e:
+        return f"🤖 【AI 個人化投資建議】\n產生投資建議時發生錯誤: {e}"
+
+    return f"🤖 【AI 個人化投資建議】\n{advice_text}"
+
+
+def generate_daily_investment_report(user) -> str:
     """
     每日投資日報主控函數：
     100% 尊重模組化設計，直接呼叫你寫好的各個獨立函數，並依序組裝成最終日報字串。
-    
+
     執行順序：
     1. 大盤焦點新聞 (findStockNews)
     2. 台指期未平倉 (fetch_tx_foreign_open_interest)
     3. 個人持股大戶籌碼 (迴圈呼叫 fetchLargeShareholdersData)
-    4. 成交量排名 (fetch_top_20_most_active_tw)
+    4. AI 個人化投資建議 (generate_portfolio_advice)
+    5. 成交量排名 (fetch_top_20_most_active_tw)
     """
     date_str = datetime.now().strftime("%Y-%m-%d")
+    user_holdings = get_user_holdings(user)
     
     # 建立日報的開頭標頭
     report_segments = [
@@ -608,22 +653,32 @@ def generate_daily_investment_report(user_stocks: list) -> str:
     # 3. 個人持股大戶籌碼
     # =========================================================================
     portfolio_lines = ["🎯 【個人持股大戶籌碼動態】"]
-    if not user_stocks:
+    if not user_holdings:
         portfolio_lines.append("• 目前尚未設定追蹤任何自選持股。")
     else:
-        for stock_id in user_stocks:
+        for holding in user_holdings:
+            stock_name = holding.get("stock_name")
             try:
                 # 迴圈呼叫你的股權分散表函數，一檔一檔拉出來
-                stock_chip_info = fetchLargeShareholdersData(stock_id, days=5)
+                stock_chip_info = fetchLargeShareholdersData(stock_name, days=5)
                 portfolio_lines.append(stock_chip_info)
             except Exception as e:
-                portfolio_lines.append(f"• {stock_id} 籌碼查詢失敗: {e}")
-                
+                portfolio_lines.append(f"• {stock_name} 籌碼查詢失敗: {e}")
+
     # 將個人持股部分用換行組合起來，塞進大報告中
     report_segments.append("\n".join(portfolio_lines))
 
     # =========================================================================
-    # 4. 成交量排名
+    # 4. AI 個人化投資建議
+    # =========================================================================
+    try:
+        advice_part = generate_portfolio_advice(user_holdings)
+        report_segments.append(advice_part)
+    except Exception as e:
+        report_segments.append(f"❌ 產生個人化投資建議時發生錯誤: {e}")
+
+    # =========================================================================
+    # 5. 成交量排名
     # =========================================================================
     try:
         # 直接呼叫你寫的 Top 20 集中市場熱力榜
@@ -635,7 +690,7 @@ def generate_daily_investment_report(user_stocks: list) -> str:
     # =========================================================================
     # 最終組裝
     # =========================================================================
-    # 用優雅的雙分隔線，把這四個獨立 Function 吐出來的文字黏接成一大封訊息
+    # 用優雅的雙分隔線，把這五個獨立 Function 吐出來的文字黏接成一大封訊息
     final_report_str = "\n\n" + "\n\n".join(report_segments) + "\n\n" + "=" * 25
     
     return final_report_str
@@ -668,6 +723,5 @@ if __name__ == "__main__":
     # print(foreign_oi)
 
     print("\n--- 每日投資日報 ---")
-    user_stocks = ["2330", "2303", "00631L"]
-    daily_report = generate_daily_investment_report(user_stocks)
+    daily_report = generate_daily_investment_report("YongHan")
     print(daily_report)
